@@ -1,0 +1,15 @@
+[package]
+name = "policy-rs"
+version = "0.0.1"
+edition = "2024"
+description = "Policy library for working with protobuf-defined policy objects"
+license = "Apache-2.0"
+
+[lib]
+doctest = false
+
+[dependencies]
+prost = "0.13"
+
+[build-dependencies]
+prost-build = "0.13"

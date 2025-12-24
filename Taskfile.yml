@@ -1,0 +1,172 @@
+# https://taskfile.dev
+
+version: "3"
+
+vars:
+  PROJECT_NAME: policy-rs
+  BUILD_DIR: target
+
+tasks:
+  default:
+    desc: "Build the project in debug mode"
+    aliases: [b]
+    cmds:
+      - cargo build
+
+  build:
+    desc: "Build the project in debug mode"
+    cmds:
+      - cargo build
+
+  "build:release":
+    desc: "Build the project in release mode"
+    aliases: [br, release]
+    cmds:
+      - cargo build --release
+
+  test:
+    desc: "Run all tests"
+    aliases: [t]
+    cmds:
+      - cargo test
+
+  "test:verbose":
+    desc: "Run all tests with verbose output"
+    aliases: [tv]
+    cmds:
+      - cargo test -- --nocapture
+
+  format:
+    desc: "Format all Rust source files"
+    aliases: [fmt, f]
+    dir: "{{.TASKFILE_DIR}}"
+    cmds:
+      - cargo fmt
+
+  "format:check":
+    desc: "Check if code is formatted correctly"
+    aliases: [fmt-check, fc]
+    dir: "{{.TASKFILE_DIR}}"
+    cmds:
+      - cargo fmt --check
+
+  lint:
+    desc: "Run linting checks (clippy)"
+    aliases: [l]
+    cmds:
+      - cargo clippy -- -D warnings
+
+  "lint:fix":
+    desc: "Run clippy and apply fixes"
+    aliases: [lf]
+    cmds:
+      - cargo clippy --fix --allow-dirty --allow-staged
+
+  clean:
+    desc: "Clean build artifacts"
+    aliases: [c]
+    cmds:
+      - cargo clean
+      - echo "Cleaned build artifacts"
+
+  check:
+    desc: "Check the project (compile without building)"
+    cmds:
+      - cargo check
+
+  docs:
+    desc: "Generate documentation"
+    cmds:
+      - cargo doc --no-deps
+      - echo "Documentation generated in target/doc/"
+
+  "docs:open":
+    desc: "Generate and open documentation"
+    cmds:
+      - cargo doc --no-deps --open
+
+  deps:
+    desc: "Check dependencies and Rust installation"
+    cmds:
+      - rustc --version
+      - cargo --version
+
+  "deps:update":
+    desc: "Update dependencies"
+    cmds:
+      - cargo update
+
+  "deps:outdated":
+    desc: "Check for outdated dependencies"
+    cmds:
+      - "cargo outdated || echo 'Install cargo-outdated: cargo install cargo-outdated'"
+
+  do:
+    desc: "Run all pre-commit checks"
+    cmds:
+      - task format
+      - task lint
+      - task test
+      - echo "All checks passed"
+
+  signoff:
+    desc: "Sign off the codebase"
+    aliases: [sign, s]
+    deps:
+      - do
+    cmds:
+      - gh signoff
+
+  info:
+    desc: "Show project information"
+    cmds:
+      - "echo 'Project: {{.PROJECT_NAME}}'"
+      - "echo 'Build directory: {{.BUILD_DIR}}'"
+      - rustc --version
+      - cargo --version
+
+  watch:
+    desc: "Watch for changes and rebuild"
+    aliases: [w]
+    cmds:
+      - "cargo watch -x build || echo 'Install cargo-watch: cargo install cargo-watch'"
+
+  "watch:test":
+    desc: "Watch for changes and run tests"
+    aliases: [wt]
+    cmds:
+      - "cargo watch -x test || echo 'Install cargo-watch: cargo install cargo-watch'"
+
+  # =============================================================================
+  # Proto / Buf
+  # =============================================================================
+
+  "proto:export":
+    desc: "Export proto files from buf registry"
+    cmds:
+      - mkdir -p proto
+      - buf export buf.build/opentelemetry/opentelemetry -o proto
+      - buf export buf.build/tero/policy -o proto
+
+  "proto:generate":
+    desc: "Generate Rust code from protos"
+    cmds:
+      - cargo build
+
+  "proto:update":
+    desc: "Export protos and regenerate Rust code"
+    cmds:
+      - "task proto:export"
+      - "task proto:generate"
+
+  # =============================================================================
+  # Release
+  # =============================================================================
+
+  release:
+    desc: "Run all checks and build release"
+    aliases: [r]
+    cmds:
+      - task do
+      - task build:release
+      - echo "Release build complete"
