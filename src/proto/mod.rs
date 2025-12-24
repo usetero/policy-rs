@@ -1,4 +1,6 @@
 #![allow(rustdoc::invalid_rust_codeblocks)]
+#![allow(clippy::doc_overindented_list_items)]
+#![allow(clippy::doc_lazy_continuation)]
 
 pub mod google {
     pub mod api {
