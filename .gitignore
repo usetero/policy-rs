@@ -1,5 +1,10 @@
 # Build artifacts
 /target
+*/target/
+
+# Cargo lock (library - let consumers determine versions)
+**/*.rs.bk
+Cargo.lock
 
 # Hermit local state
 /.hermit
