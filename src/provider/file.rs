@@ -8,9 +8,13 @@ use crate::field::LogFieldSelector;
 use crate::policy::Policy;
 use crate::proto::tero::policy::v1::{LogMatcher, LogTarget, Policy as ProtoPolicy, log_matcher};
 
-use super::PolicyProvider;
+use super::{PolicyCallback, PolicyProvider};
 
 /// A policy provider that loads policies from a JSON file.
+///
+/// This provider loads policies from a JSON file on disk. It supports
+/// subscribing to updates, though file watching is not yet implemented -
+/// the callback is invoked once with the initial policies.
 pub struct FileProvider {
     path: PathBuf,
 }
@@ -22,17 +26,11 @@ impl FileProvider {
             path: path.as_ref().to_path_buf(),
         }
     }
-}
 
-impl PolicyProvider for FileProvider {
-    fn load(&self) -> Result<Vec<Policy>, PolicyError> {
-        let contents = fs::read_to_string(&self.path).map_err(|e| PolicyError::FileRead {
-            path: self.path.clone(),
-            source: e,
-        })?;
-
+    /// Parse policies from file contents.
+    fn parse(&self, contents: &str) -> Result<Vec<Policy>, PolicyError> {
         let json_file: JsonPolicyFile =
-            serde_json::from_str(&contents).map_err(|e| PolicyError::ParseError {
+            serde_json::from_str(contents).map_err(|e| PolicyError::ParseError {
                 path: self.path.clone(),
                 message: e.to_string(),
             })?;
@@ -42,6 +40,28 @@ impl PolicyProvider for FileProvider {
             .into_iter()
             .map(convert_json_policy)
             .collect()
+    }
+}
+
+impl PolicyProvider for FileProvider {
+    fn load(&self) -> Result<Vec<Policy>, PolicyError> {
+        let contents = fs::read_to_string(&self.path).map_err(|e| PolicyError::FileRead {
+            path: self.path.clone(),
+            source: e,
+        })?;
+
+        self.parse(&contents)
+    }
+
+    fn subscribe(&self, callback: PolicyCallback) -> Result<(), PolicyError> {
+        // Load policies and invoke callback immediately
+        let policies = self.load()?;
+        callback(policies);
+
+        // TODO: File watching can be added here in the future
+        // For now, this is a one-shot subscription
+
+        Ok(())
     }
 }
 
@@ -289,5 +309,29 @@ mod tests {
                 assert_eq!(log_target.keep, "none");
             }
         }
+    }
+
+    #[test]
+    fn load_policy_with_scope_attribute() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "scope-policy",
+                    "name": "Scope Attribute Policy",
+                    "matchers": [
+                        { "field": "scope_attribute", "key": "scope.name", "pattern": "test" }
+                    ],
+                    "keep": "all"
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        assert_eq!(policies.len(), 1);
+        let log_target = policies[0].log_target().unwrap();
+        assert_eq!(log_target.r#match.len(), 1);
     }
 }

@@ -5,12 +5,16 @@ pub mod field;
 mod policy;
 pub mod proto;
 pub mod provider;
+pub mod registry;
 
 pub use error::PolicyError;
 pub use field::LogFieldSelector;
 pub use policy::Policy;
 pub use proto::opentelemetry::proto::common::v1 as otel_common;
 pub use provider::{FileProvider, PolicyProvider};
+pub use registry::{
+    PolicyEntry, PolicyRegistry, PolicySnapshot, PolicyStats, ProviderHandle, ProviderId,
+};
 
 #[cfg(test)]
 mod tests {
