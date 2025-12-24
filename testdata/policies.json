@@ -1,0 +1,57 @@
+{
+  "policies": [
+    {
+      "id": "drop-echo-logs",
+      "name": "drop-echo-logs",
+      "matchers": [
+        { "field": "log_attribute", "key": "ddsource", "pattern": "nginx" }
+      ],
+      "keep": "none"
+    },
+    {
+      "id": "drop-debug-logs",
+      "name": "drop-debug-logs",
+      "matchers": [
+        { "field": "log_body", "pattern": "debug" },
+        { "field": "log_body", "pattern": "trace" }
+      ],
+      "keep": "none"
+    },
+    {
+      "id": "drop-no-such-file-or-directory-logs",
+      "name": "drop-no-such-file-or-directory-logs",
+      "matchers": [
+        { "field": "log_body", "pattern": "no such file or directory" }
+      ],
+      "keep": "none"
+    },
+    {
+      "id": "drop-debug-level",
+      "name": "drop-debug-level",
+      "matchers": [{ "field": "log_severity_text", "pattern": "DEBUG" }],
+      "keep": "none"
+    },
+    {
+      "id": "drop-edge-logs",
+      "name": "drop-edge-logs",
+      "matchers": [
+        {
+          "field": "resource_attribute",
+          "key": "service.name",
+          "pattern": "^.*edge$"
+        }
+      ],
+      "keep": "none"
+    },
+    {
+      "id": "keep-error-logs",
+      "name": "keep-error-logs",
+      "matchers": [
+        { "field": "log_severity_text", "pattern": "error" },
+        { "field": "log_severity_text", "pattern": "critical" },
+        { "field": "log_severity_text", "pattern": "fatal" }
+      ],
+      "keep": "all"
+    }
+  ]
+}
