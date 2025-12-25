@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use crate::Policy;
+use crate::engine::CompiledMatchers;
 use crate::error::PolicyError;
 use crate::provider::PolicyProvider;
 
@@ -76,6 +77,8 @@ struct SnapshotInner {
     policies: Vec<PolicyEntry>,
     /// Index from policy ID to position in policies vec.
     index: HashMap<String, usize>,
+    /// Compiled matchers for efficient evaluation.
+    compiled: Option<CompiledMatchers>,
 }
 
 impl PolicySnapshot {
@@ -85,6 +88,7 @@ impl PolicySnapshot {
             inner: Arc::new(SnapshotInner {
                 policies: Vec::new(),
                 index: HashMap::new(),
+                compiled: None,
             }),
         }
     }
@@ -115,6 +119,11 @@ impl PolicySnapshot {
     /// Iterate over all policies.
     pub fn iter(&self) -> impl Iterator<Item = &PolicyEntry> {
         self.inner.policies.iter()
+    }
+
+    /// Get the compiled matchers for efficient evaluation.
+    pub fn compiled_matchers(&self) -> Option<&CompiledMatchers> {
+        self.inner.compiled.as_ref()
     }
 }
 
@@ -207,6 +216,9 @@ impl RegistryInner {
         let mut policies = Vec::new();
         let mut index = HashMap::new();
 
+        // Collect all policies with their stats for compilation
+        let mut policies_for_compile: Vec<(Policy, Arc<PolicyStats>)> = Vec::new();
+
         for (&provider_id, entries) in providers {
             for (policy, stats) in entries {
                 let idx = policies.len();
@@ -216,11 +228,26 @@ impl RegistryInner {
                     provider_id,
                     stats: Arc::clone(stats),
                 });
+                policies_for_compile.push((policy.clone(), Arc::clone(stats)));
             }
         }
 
+        // Compile matchers
+        let compiled = match CompiledMatchers::build(policies_for_compile.into_iter()) {
+            Ok(matchers) => Some(matchers),
+            Err(e) => {
+                // Log error but continue - fail open
+                eprintln!("Failed to compile policy matchers: {}", e);
+                None
+            }
+        };
+
         let new_snapshot = PolicySnapshot {
-            inner: Arc::new(SnapshotInner { policies, index }),
+            inner: Arc::new(SnapshotInner {
+                policies,
+                index,
+                compiled,
+            }),
         };
 
         let mut snapshot = self.snapshot.write().unwrap();
@@ -297,7 +324,7 @@ impl PolicyRegistry {
     ///
     /// The handle can be cloned and used from any thread to push
     /// policy updates to the registry.
-    pub fn register_provider(&self) -> ProviderHandle {
+    fn register_provider(&self) -> ProviderHandle {
         let provider_id = self.inner.register_provider();
         ProviderHandle {
             provider_id,

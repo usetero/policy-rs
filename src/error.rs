@@ -25,6 +25,9 @@ pub enum PolicyError {
 
     /// Field selection error
     FieldError { reason: String },
+
+    /// Failed to compile Hyperscan database
+    CompileError { reason: String },
 }
 
 impl std::fmt::Display for PolicyError {
@@ -47,6 +50,9 @@ impl std::fmt::Display for PolicyError {
             }
             PolicyError::FieldError { reason } => {
                 write!(f, "field error: {}", reason)
+            }
+            PolicyError::CompileError { reason } => {
+                write!(f, "failed to compile Hyperscan database: {}", reason)
             }
         }
     }

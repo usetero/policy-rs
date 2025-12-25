@@ -3,7 +3,7 @@
 use crate::proto::tero::policy::v1::LogField;
 
 /// Represents a field selector for log records.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LogFieldSelector {
     /// Simple log field (body, severity_text, etc.)
     Simple(LogField),
