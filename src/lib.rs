@@ -16,7 +16,7 @@ pub use error::PolicyError;
 pub use field::LogFieldSelector;
 pub use policy::Policy;
 pub use proto::opentelemetry::proto::common::v1 as otel_common;
-pub use provider::{FileProvider, PolicyProvider};
+pub use provider::{FileProvider, PolicyCallback, PolicyProvider};
 pub use registry::{
     PolicyEntry, PolicyRegistry, PolicySnapshot, PolicyStats, ProviderHandle, ProviderId,
 };

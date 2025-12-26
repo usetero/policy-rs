@@ -324,7 +324,7 @@ impl PolicyRegistry {
     ///
     /// The handle can be cloned and used from any thread to push
     /// policy updates to the registry.
-    fn register_provider(&self) -> ProviderHandle {
+    pub fn register_provider(&self) -> ProviderHandle {
         let provider_id = self.inner.register_provider();
         ProviderHandle {
             provider_id,

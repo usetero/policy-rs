@@ -119,12 +119,14 @@ impl PatternGroups {
                 None => continue, // Skip non-log policies
             };
 
-            let matcher_count = log_target.r#match.len();
+            // Count only non-negated matchers for required_match_count
+            // Negated matchers only disqualify, they don't add to the match count
+            let required_match_count = log_target.r#match.iter().filter(|m| !m.negate).count();
 
             // Add compiled policy
             result.policies.push(CompiledPolicy {
                 id: policy.id().to_string(),
-                required_match_count: matcher_count,
+                required_match_count,
                 keep: CompiledKeep::parse(&log_target.keep)?,
                 stats,
                 enabled: policy.enabled(),
