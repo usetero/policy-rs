@@ -180,6 +180,30 @@ tasks:
 
         echo "🔧 Checking for required dependencies..."
 
+        # Check for protoc (needed for proto code generation)
+        if ! command -v protoc >/dev/null 2>&1; then
+          echo "📦 Installing protoc..."
+          if [ "$(uname)" = "Darwin" ]; then
+            if command -v brew >/dev/null 2>&1; then
+              brew install protobuf
+            else
+              echo "⚠️  Homebrew not found. Install protobuf manually or use Hermit."
+            fi
+          elif [ "$(uname)" = "Linux" ]; then
+            if command -v apt-get >/dev/null 2>&1; then
+              sudo apt-get update && sudo apt-get install -y protobuf-compiler
+            elif command -v yum >/dev/null 2>&1; then
+              sudo yum install -y protobuf-compiler
+            else
+              echo "⚠️  Unknown package manager. Install protobuf-compiler manually."
+            fi
+          else
+            echo "⚠️  Unknown platform: $(uname)"
+          fi
+        else
+          echo "✅ protoc already installed"
+        fi
+
         # Check for hyperscan/vectorscan (needed for catalog service)
         if ! pkg-config --exists libhs 2>/dev/null; then
           echo "📦 Installing hyperscan..."
