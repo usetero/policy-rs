@@ -44,17 +44,6 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Extract version from tag
-        id: version
-        run: |
-          # Remove 'v' prefix if present (e.g., v0.1.0 -> 0.1.0)
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Update Cargo.toml version
-        run: |
-          sed -i 's/^version = ".*"/version = "${{ steps.version.outputs.version }}"/' Cargo.toml
-
       - name: Verify version
         run: |
           echo "Publishing version: ${{ steps.version.outputs.version }}"
