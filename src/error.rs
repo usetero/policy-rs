@@ -28,6 +28,12 @@ pub enum PolicyError {
 
     /// Failed to compile Hyperscan database
     CompileError { reason: String },
+
+    /// HTTP provider error
+    HttpError(String),
+
+    /// gRPC provider error
+    GrpcError(String),
 }
 
 impl std::fmt::Display for PolicyError {
@@ -53,6 +59,12 @@ impl std::fmt::Display for PolicyError {
             }
             PolicyError::CompileError { reason } => {
                 write!(f, "failed to compile Hyperscan database: {}", reason)
+            }
+            PolicyError::HttpError(msg) => {
+                write!(f, "HTTP provider error: {}", msg)
+            }
+            PolicyError::GrpcError(msg) => {
+                write!(f, "gRPC provider error: {}", msg)
             }
         }
     }

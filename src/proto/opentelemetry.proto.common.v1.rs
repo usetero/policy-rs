@@ -2,17 +2,22 @@
 /// Represents any type of attribute value. AnyValue may contain a
 /// primitive value such as a string or integer or it may contain an arbitrary nested
 /// object containing arrays, key-value lists and primitives.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AnyValue {
     /// The value is one of the listed fields. It is valid for all values to be unspecified
     /// in which case this AnyValue is considered to be "empty".
     #[prost(oneof = "any_value::Value", tags = "1, 2, 3, 4, 5, 6, 7")]
+    #[serde(flatten)]
     pub value: ::core::option::Option<any_value::Value>,
 }
 /// Nested message and enum types in `AnyValue`.
 pub mod any_value {
     /// The value is one of the listed fields. It is valid for all values to be unspecified
     /// in which case this AnyValue is considered to be "empty".
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Value {
         #[prost(string, tag = "1")]
@@ -33,6 +38,8 @@ pub mod any_value {
 }
 /// ArrayValue is a list of AnyValue messages. We need ArrayValue as a message
 /// since oneof in AnyValue does not allow repeated fields.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ArrayValue {
     /// Array of values. The array may be empty (contain 0 elements).
@@ -44,6 +51,8 @@ pub struct ArrayValue {
 /// a list of KeyValue messages (e.g. in Span) we use `repeated KeyValue` directly to
 /// avoid unnecessary extra wrapping (which slows down the protocol). The 2 approaches
 /// are semantically equivalent.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct KeyValueList {
     /// A collection of key/value pairs of key-value pairs. The list may be empty (may
@@ -57,6 +66,8 @@ pub struct KeyValueList {
 }
 /// Represents a key-value pair that is used to store Span attributes, Link
 /// attributes, etc.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct KeyValue {
     /// The key name of the pair.
@@ -68,6 +79,8 @@ pub struct KeyValue {
 }
 /// InstrumentationScope is a message representing the instrumentation scope information
 /// such as the fully qualified name and version.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InstrumentationScope {
     /// A name denoting the Instrumentation scope.
@@ -94,6 +107,8 @@ pub struct InstrumentationScope {
 /// Entity represents an object of interest associated with produced telemetry: e.g spans, metrics, profiles, or logs.
 ///
 /// Status: \[Development\]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EntityRef {
     /// The Schema URL, if known. This is the identifier of the Schema that the entity data
