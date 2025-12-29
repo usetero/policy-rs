@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/usetero/policy-rs/compare/v1.0.2...v1.0.3) (2025-12-29)
+
+
+### Bug Fixes
+
+* use rust releases in release-please ([#10](https://github.com/usetero/policy-rs/issues/10)) ([2f103e8](https://github.com/usetero/policy-rs/commit/2f103e84e45cdef302ffbdc1a016c8530c48f4a0))
+
 ## 1.0.0 (2025-12-29)
 
 
