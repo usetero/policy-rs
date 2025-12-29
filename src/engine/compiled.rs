@@ -13,6 +13,7 @@ use crate::registry::PolicyStats;
 
 use super::keep::CompiledKeep;
 use super::match_key::MatchKey;
+use super::transform::CompiledTransform;
 
 /// Reference from a pattern match back to its policy.
 #[derive(Debug, Clone)]
@@ -30,6 +31,8 @@ pub struct CompiledPolicy {
     pub required_match_count: usize,
     /// The keep action for this policy.
     pub keep: CompiledKeep,
+    /// The transform to apply when this policy matches (if any).
+    pub transform: Option<CompiledTransform>,
     /// Statistics for this policy.
     pub stats: Arc<PolicyStats>,
     /// Whether this policy is enabled.
@@ -123,11 +126,19 @@ impl PatternGroups {
             // Negated matchers only disqualify, they don't add to the match count
             let required_match_count = log_target.r#match.iter().filter(|m| !m.negate).count();
 
+            // Compile transform if present
+            let transform = log_target
+                .transform
+                .as_ref()
+                .map(CompiledTransform::from_proto)
+                .filter(|t| !t.is_empty());
+
             // Add compiled policy
             result.policies.push(CompiledPolicy {
                 id: policy.id().to_string(),
                 required_match_count,
                 keep: CompiledKeep::parse(&log_target.keep)?,
+                transform,
                 stats,
                 enabled: policy.enabled(),
             });
@@ -265,7 +276,9 @@ fn regex_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::tero::policy::v1::{LogTarget, Policy as ProtoPolicy};
+    use crate::proto::tero::policy::v1::{
+        LogAdd, LogRedact, LogTarget, LogTransform, Policy as ProtoPolicy, log_add, log_redact,
+    };
 
     fn make_policy_with_matcher(
         id: &str,
@@ -406,5 +419,101 @@ mod tests {
         let db = compiled.databases.get(&key).unwrap();
         assert_eq!(db.pattern_index.len(), 1);
         assert_eq!(db.pattern_index[0].policy_index, 0);
+    }
+
+    #[test]
+    fn compile_policy_without_transform() {
+        let policy = make_policy_with_matcher(
+            "test",
+            log_matcher::Field::LogField(LogField::Body.into()),
+            log_matcher::Match::Regex("error".to_string()),
+            false,
+            "none",
+        );
+
+        let stats = Arc::new(PolicyStats::default());
+        let compiled = CompiledMatchers::build([(policy, stats)].into_iter()).unwrap();
+
+        assert!(compiled.policies[0].transform.is_none());
+    }
+
+    #[test]
+    fn compile_policy_with_transform() {
+        let matcher = LogMatcher {
+            field: Some(log_matcher::Field::LogField(LogField::Body.into())),
+            r#match: Some(log_matcher::Match::Regex("error".to_string())),
+            negate: false,
+        };
+
+        let transform = LogTransform {
+            redact: vec![LogRedact {
+                field: Some(log_redact::Field::LogAttribute("password".to_string())),
+                replacement: "[REDACTED]".to_string(),
+            }],
+            add: vec![LogAdd {
+                field: Some(log_add::Field::LogAttribute("processed".to_string())),
+                value: "true".to_string(),
+                upsert: false,
+            }],
+            ..Default::default()
+        };
+
+        let log_target = LogTarget {
+            r#match: vec![matcher],
+            keep: "all".to_string(),
+            transform: Some(transform),
+        };
+
+        let proto = ProtoPolicy {
+            id: "test".to_string(),
+            name: "test".to_string(),
+            enabled: true,
+            target: Some(crate::proto::tero::policy::v1::policy::Target::Log(
+                log_target,
+            )),
+            ..Default::default()
+        };
+
+        let policy = Policy::new(proto);
+        let stats = Arc::new(PolicyStats::default());
+        let compiled = CompiledMatchers::build([(policy, stats)].into_iter()).unwrap();
+
+        let transform = compiled.policies[0].transform.as_ref().unwrap();
+        assert_eq!(transform.ops.len(), 2); // redact + add
+    }
+
+    #[test]
+    fn compile_policy_with_empty_transform() {
+        let matcher = LogMatcher {
+            field: Some(log_matcher::Field::LogField(LogField::Body.into())),
+            r#match: Some(log_matcher::Match::Regex("error".to_string())),
+            negate: false,
+        };
+
+        // Empty transform (no operations)
+        let transform = LogTransform::default();
+
+        let log_target = LogTarget {
+            r#match: vec![matcher],
+            keep: "all".to_string(),
+            transform: Some(transform),
+        };
+
+        let proto = ProtoPolicy {
+            id: "test".to_string(),
+            name: "test".to_string(),
+            enabled: true,
+            target: Some(crate::proto::tero::policy::v1::policy::Target::Log(
+                log_target,
+            )),
+            ..Default::default()
+        };
+
+        let policy = Policy::new(proto);
+        let stats = Arc::new(PolicyStats::default());
+        let compiled = CompiledMatchers::build([(policy, stats)].into_iter()).unwrap();
+
+        // Empty transforms are filtered out (set to None)
+        assert!(compiled.policies[0].transform.is_none());
     }
 }

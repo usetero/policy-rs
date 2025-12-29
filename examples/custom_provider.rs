@@ -5,12 +5,15 @@
 //!
 //! Run with: cargo run --example custom_provider
 
+mod common;
+
+use common::LogRecord;
 use policy_rs::proto::tero::policy::v1::{
     LogField, LogMatcher, LogTarget, Policy as ProtoPolicy, log_matcher,
 };
 use policy_rs::{
-    EvaluateResult, LogFieldSelector, Matchable, Policy, PolicyCallback, PolicyEngine, PolicyError,
-    PolicyProvider, PolicyRegistry,
+    EvaluateResult, Policy, PolicyCallback, PolicyEngine, PolicyError, PolicyProvider,
+    PolicyRegistry,
 };
 use std::sync::{Arc, RwLock};
 
@@ -118,34 +121,6 @@ impl PolicyProvider for ApiPolicyProvider {
     }
 }
 
-/// A simple log record for demonstration.
-struct LogRecord {
-    body: String,
-    severity: String,
-}
-
-impl LogRecord {
-    fn new(body: &str, severity: &str) -> Self {
-        Self {
-            body: body.to_string(),
-            severity: severity.to_string(),
-        }
-    }
-}
-
-impl Matchable for LogRecord {
-    fn get_field(&self, field: &LogFieldSelector) -> Option<&str> {
-        match field {
-            LogFieldSelector::Simple(log_field) => match log_field {
-                LogField::Body => Some(&self.body),
-                LogField::SeverityText => Some(&self.severity),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create registry with custom provider
@@ -171,15 +146,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for log in &logs {
         let result = engine.evaluate(&snapshot, log).await?;
-        print!("[{}] {}: ", log.severity, log.body);
+        print!(
+            "[{}] {}: ",
+            log.severity.as_deref().unwrap_or(""),
+            log.body.as_deref().unwrap_or("")
+        );
         match result {
             EvaluateResult::NoMatch => println!("pass through"),
-            EvaluateResult::Keep { policy_id } => println!("KEEP ({})", policy_id),
+            EvaluateResult::Keep { policy_id, .. } => println!("KEEP ({})", policy_id),
             EvaluateResult::Drop { policy_id } => println!("DROP ({})", policy_id),
             EvaluateResult::Sample {
                 policy_id,
                 percentage,
                 keep,
+                ..
             } => {
                 println!(
                     "SAMPLE {}% ({}) -> {}",
@@ -188,7 +168,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if keep { "kept" } else { "dropped" }
                 )
             }
-            EvaluateResult::RateLimit { policy_id, allowed } => {
+            EvaluateResult::RateLimit {
+                policy_id, allowed, ..
+            } => {
                 println!(
                     "RATE LIMIT ({}) -> {}",
                     policy_id,
@@ -215,15 +197,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n--- Evaluation After Update ---");
     for log in &logs {
         let result = engine.evaluate(&new_snapshot, log).await?;
-        print!("[{}] {}: ", log.severity, log.body);
+        print!(
+            "[{}] {}: ",
+            log.severity.as_deref().unwrap_or(""),
+            log.body.as_deref().unwrap_or("")
+        );
         match result {
             EvaluateResult::NoMatch => println!("pass through"),
-            EvaluateResult::Keep { policy_id } => println!("KEEP ({})", policy_id),
+            EvaluateResult::Keep { policy_id, .. } => println!("KEEP ({})", policy_id),
             EvaluateResult::Drop { policy_id } => println!("DROP ({})", policy_id),
             EvaluateResult::Sample {
                 policy_id,
                 percentage,
                 keep,
+                ..
             } => {
                 println!(
                     "SAMPLE {}% ({}) -> {}",
@@ -232,7 +219,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if keep { "kept" } else { "dropped" }
                 )
             }
-            EvaluateResult::RateLimit { policy_id, allowed } => {
+            EvaluateResult::RateLimit {
+                policy_id, allowed, ..
+            } => {
                 println!(
                     "RATE LIMIT ({}) -> {}",
                     policy_id,

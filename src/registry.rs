@@ -16,11 +16,59 @@ use crate::provider::PolicyProvider;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProviderId(u64);
 
+/// Statistics for a transform stage (remove, redact, rename, add).
+#[derive(Debug, Default)]
+pub struct TransformStageStats {
+    /// Number of times this stage was applied successfully.
+    pub hits: AtomicU64,
+    /// Number of times this stage was evaluated but the field selected nothing.
+    pub misses: AtomicU64,
+}
+
+impl TransformStageStats {
+    /// Record a successful transform application.
+    pub fn record_hit(&self) {
+        self.hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a failed transform application (field not found).
+    pub fn record_miss(&self) {
+        self.misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Get current hit count.
+    pub fn hits(&self) -> u64 {
+        self.hits.load(Ordering::Relaxed)
+    }
+
+    /// Get current miss count.
+    pub fn misses(&self) -> u64 {
+        self.misses.load(Ordering::Relaxed)
+    }
+
+    /// Reset stats and return previous values.
+    pub fn reset(&self) -> (u64, u64) {
+        let hits = self.hits.swap(0, Ordering::Relaxed);
+        let misses = self.misses.swap(0, Ordering::Relaxed);
+        (hits, misses)
+    }
+}
+
 /// Statistics for a single policy.
 #[derive(Debug, Default)]
 pub struct PolicyStats {
+    /// Number of times this policy matched telemetry.
     pub match_hits: AtomicU64,
+    /// Number of times this policy was evaluated but did not match.
     pub match_misses: AtomicU64,
+    /// Statistics for the remove transform stage.
+    pub remove: TransformStageStats,
+    /// Statistics for the redact transform stage.
+    pub redact: TransformStageStats,
+    /// Statistics for the rename transform stage.
+    pub rename: TransformStageStats,
+    /// Statistics for the add transform stage.
+    pub add: TransformStageStats,
 }
 
 impl PolicyStats {
@@ -44,12 +92,35 @@ impl PolicyStats {
         self.match_misses.load(Ordering::Relaxed)
     }
 
-    /// Reset stats and return previous values.
+    /// Reset match stats and return previous values.
     pub fn reset(&self) -> (u64, u64) {
         let hits = self.match_hits.swap(0, Ordering::Relaxed);
         let misses = self.match_misses.swap(0, Ordering::Relaxed);
         (hits, misses)
     }
+
+    /// Reset all stats (match + transform stages) and return previous values.
+    pub fn reset_all(&self) -> PolicyStatsSnapshot {
+        PolicyStatsSnapshot {
+            match_hits: self.match_hits.swap(0, Ordering::Relaxed),
+            match_misses: self.match_misses.swap(0, Ordering::Relaxed),
+            remove: self.remove.reset(),
+            redact: self.redact.reset(),
+            rename: self.rename.reset(),
+            add: self.add.reset(),
+        }
+    }
+}
+
+/// A snapshot of all policy stats for reporting.
+#[derive(Debug, Clone, Default)]
+pub struct PolicyStatsSnapshot {
+    pub match_hits: u64,
+    pub match_misses: u64,
+    pub remove: (u64, u64),
+    pub redact: (u64, u64),
+    pub rename: (u64, u64),
+    pub add: (u64, u64),
 }
 
 /// A policy with its associated provider and stats.
