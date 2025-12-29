@@ -1,8 +1,20 @@
 //! Policy providers for loading policies from various sources.
 
 mod file;
+#[cfg(feature = "grpc")]
+mod grpc;
+#[cfg(feature = "http")]
+mod http;
+#[cfg(any(feature = "http", feature = "grpc"))]
+mod sync;
 
 pub use file::FileProvider;
+#[cfg(feature = "grpc")]
+pub use grpc::{GrpcProvider, GrpcProviderConfig};
+#[cfg(feature = "http")]
+pub use http::{ContentType, HttpProvider, HttpProviderConfig};
+#[cfg(any(feature = "http", feature = "grpc"))]
+pub use sync::StatsCollector;
 
 use std::sync::Arc;
 

@@ -16,7 +16,13 @@ pub use error::PolicyError;
 pub use field::LogFieldSelector;
 pub use policy::Policy;
 pub use proto::opentelemetry::proto::common::v1 as otel_common;
+#[cfg(any(feature = "http", feature = "grpc"))]
+pub use provider::StatsCollector;
+#[cfg(feature = "http")]
+pub use provider::{ContentType, HttpProvider, HttpProviderConfig};
 pub use provider::{FileProvider, PolicyCallback, PolicyProvider};
+#[cfg(feature = "grpc")]
+pub use provider::{GrpcProvider, GrpcProviderConfig};
 pub use registry::{
     PolicyEntry, PolicyRegistry, PolicySnapshot, PolicyStats, PolicyStatsSnapshot, ProviderHandle,
     ProviderId, TransformStageStats,
