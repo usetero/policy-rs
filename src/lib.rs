@@ -9,8 +9,8 @@ pub mod provider;
 pub mod registry;
 
 pub use engine::{
-    CompiledKeep, CompiledMatchers, CompiledPolicy, EvaluateResult, MatchKey, Matchable,
-    PolicyEngine, RateLimiters,
+    CompiledKeep, CompiledMatchers, CompiledPolicy, CompiledTransform, EvaluateResult, MatchKey,
+    Matchable, PolicyEngine, RateLimiters, TransformOp, Transformable,
 };
 pub use error::PolicyError;
 pub use field::LogFieldSelector;
@@ -18,7 +18,8 @@ pub use policy::Policy;
 pub use proto::opentelemetry::proto::common::v1 as otel_common;
 pub use provider::{FileProvider, PolicyCallback, PolicyProvider};
 pub use registry::{
-    PolicyEntry, PolicyRegistry, PolicySnapshot, PolicyStats, ProviderHandle, ProviderId,
+    PolicyEntry, PolicyRegistry, PolicySnapshot, PolicyStats, PolicyStatsSnapshot, ProviderHandle,
+    ProviderId, TransformStageStats,
 };
 
 #[cfg(test)]

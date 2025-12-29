@@ -2,50 +2,13 @@
 //!
 //! Run with: cargo run --example multiple_providers
 
+mod common;
+
+use common::LogRecord;
 use policy_rs::proto::tero::policy::v1::{
     LogField, LogMatcher, LogTarget, Policy as ProtoPolicy, log_matcher,
 };
-use policy_rs::{
-    EvaluateResult, LogFieldSelector, Matchable, Policy, PolicyEngine, PolicyRegistry,
-};
-
-/// A simple log record for demonstration.
-struct LogRecord {
-    body: String,
-    severity: String,
-    service: Option<String>,
-}
-
-impl LogRecord {
-    fn new(body: &str, severity: &str) -> Self {
-        Self {
-            body: body.to_string(),
-            severity: severity.to_string(),
-            service: None,
-        }
-    }
-
-    fn with_service(mut self, service: &str) -> Self {
-        self.service = Some(service.to_string());
-        self
-    }
-}
-
-impl Matchable for LogRecord {
-    fn get_field(&self, field: &LogFieldSelector) -> Option<&str> {
-        match field {
-            LogFieldSelector::Simple(log_field) => match log_field {
-                LogField::Body => Some(&self.body),
-                LogField::SeverityText => Some(&self.severity),
-                _ => None,
-            },
-            LogFieldSelector::ResourceAttribute(key) if key == "service.name" => {
-                self.service.as_deref()
-            }
-            _ => None,
-        }
-    }
-}
+use policy_rs::{EvaluateResult, Policy, PolicyEngine, PolicyRegistry};
 
 /// Create a policy programmatically.
 fn create_policy(id: &str, field: log_matcher::Field, pattern: &str, keep: &str) -> Policy {
@@ -127,7 +90,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("Info log", LogRecord::new("User logged in", "INFO")),
         (
             "Auth error",
-            LogRecord::new("Auth failed", "ERROR").with_service("auth-service"),
+            LogRecord::new("Auth failed", "ERROR")
+                .with_resource_attr("service.name", "auth-service"),
         ),
         ("Health check", LogRecord::new("health check ok", "INFO")),
     ];
@@ -138,12 +102,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         print!("{}: ", name);
         match result {
             EvaluateResult::NoMatch => println!("pass through"),
-            EvaluateResult::Keep { policy_id } => println!("KEEP ({})", policy_id),
+            EvaluateResult::Keep { policy_id, .. } => println!("KEEP ({})", policy_id),
             EvaluateResult::Drop { policy_id } => println!("DROP ({})", policy_id),
             EvaluateResult::Sample {
                 policy_id,
                 percentage,
                 keep,
+                ..
             } => {
                 println!(
                     "SAMPLE {}% ({}) -> {}",
@@ -152,7 +117,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if keep { "kept" } else { "dropped" }
                 )
             }
-            EvaluateResult::RateLimit { policy_id, allowed } => {
+            EvaluateResult::RateLimit {
+                policy_id, allowed, ..
+            } => {
                 println!(
                     "RATE LIMIT ({}) -> {}",
                     policy_id,
