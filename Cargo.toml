@@ -4,6 +4,12 @@ version = "0.0.1"
 edition = "2024"
 description = "Policy library for working with protobuf-defined policy objects"
 license = "Apache-2.0"
+repository = "https://github.com/usetero/policy-rs"
+homepage = "https://github.com/usetero/policy-rs"
+documentation = "https://docs.rs/policy-rs"
+readme = "README.md"
+keywords = ["policy", "telemetry", "observability", "otel"]
+categories = ["development-tools"]
 
 [lib]
 doctest = false
