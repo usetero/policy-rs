@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.4](https://github.com/usetero/policy-rs/compare/v1.0.3...v1.0.4) (2026-01-09)
+
+
+### Bug Fixes
+
+* ci cd installation ([#14](https://github.com/usetero/policy-rs/issues/14)) ([7baa643](https://github.com/usetero/policy-rs/commit/7baa643f57f3d5135f97166a8299807f727f1352))
+* use different vectorscan bindings ([#12](https://github.com/usetero/policy-rs/issues/12)) ([273636d](https://github.com/usetero/policy-rs/commit/273636d55e9ab85df9af85745c146b004a89fdf9))
+
 ## [1.0.3](https://github.com/usetero/policy-rs/compare/v1.0.2...v1.0.3) (2025-12-29)
 
 
