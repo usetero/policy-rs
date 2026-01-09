@@ -206,7 +206,7 @@ impl VectorscanDatabase {
         }
 
         if result != vectorscan_rs_sys::HS_SUCCESS as i32
-            && result != vectorscan_rs_sys::HS_SCAN_TERMINATED as i32
+            && result != vectorscan_rs_sys::HS_SCAN_TERMINATED
         {
             return Err(PolicyError::CompileError {
                 reason: format!("scan failed with code {}", result),
