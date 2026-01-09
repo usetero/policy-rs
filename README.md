@@ -282,6 +282,93 @@ handle.update(vec![
 let snapshot = registry.snapshot();
 ```
 
+### Configuration-Based Providers
+
+Use the config module to define providers in JSON/TOML configuration files. The
+`ProviderConfig` type is designed to be embedded in your application's config:
+
+```rust
+use policy_rs::config::{ProviderConfig, register_providers};
+use policy_rs::PolicyRegistry;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct AppConfig {
+    service_name: String,
+    policy_providers: Vec<ProviderConfig>,
+}
+
+// Parse your app config
+let config: AppConfig = serde_json::from_str(r#"{
+    "service_name": "my-app",
+    "policy_providers": [
+        {
+            "id": "local",
+            "type": "file",
+            "path": "policies.json"
+        },
+        {
+            "id": "remote",
+            "type": "http",
+            "url": "https://api.example.com/policies",
+            "headers": [
+                { "name": "Authorization", "value": "Bearer token123" }
+            ],
+            "poll_interval_secs": 60
+        }
+    ]
+}"#)?;
+
+// Register all providers at once
+let registry = PolicyRegistry::new();
+register_providers(&config.policy_providers, &registry)?;
+```
+
+#### Provider Config Format
+
+Each provider configuration has a `type` field that determines the provider:
+
+**File Provider:**
+
+```json
+{
+  "id": "local-policies",
+  "type": "file",
+  "path": "policies.json"
+}
+```
+
+**HTTP Provider** (requires `http` feature):
+
+```json
+{
+  "id": "remote-policies",
+  "type": "http",
+  "url": "https://api.example.com/policies",
+  "headers": [{ "name": "Authorization", "value": "Bearer token" }],
+  "poll_interval_secs": 60,
+  "content_type": "application/json"
+}
+```
+
+**gRPC Provider** (requires `grpc` feature):
+
+```json
+{
+  "id": "grpc-policies",
+  "type": "grpc",
+  "endpoint": "https://grpc.example.com:443"
+}
+```
+
+You can also parse just the provider list directly:
+
+```rust
+let providers: Vec<ProviderConfig> = serde_json::from_str(r#"[
+    { "id": "file", "type": "file", "path": "policies.json" }
+]"#)?;
+```
+
 ### Transform Order
 
 When using `evaluate_and_transform`, transformations are applied in a fixed
@@ -348,12 +435,14 @@ See the `examples/` directory:
 - `transforms.rs` - Apply log transformations
 - `multiple_providers.rs` - Combine multiple policy sources
 - `custom_provider.rs` - Implement a custom provider
+- `config_providers.rs` - Configure providers via JSON config
 
 Run examples with:
 
 ```sh
 cargo run --example basic_usage
 cargo run --example transforms
+cargo run --example config_providers
 ```
 
 ## License

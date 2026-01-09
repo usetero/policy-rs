@@ -1,5 +1,6 @@
 //! Policy library for working with protobuf-defined policy objects.
 
+pub mod config;
 pub mod engine;
 pub mod error;
 pub mod field;
@@ -8,6 +9,7 @@ pub mod proto;
 pub mod provider;
 pub mod registry;
 
+pub use config::{ProviderConfig, register_providers};
 pub use engine::{
     CompiledKeep, CompiledMatchers, CompiledPolicy, CompiledTransform, EvaluateResult, MatchKey,
     Matchable, PolicyEngine, RateLimiters, TransformOp, Transformable,
