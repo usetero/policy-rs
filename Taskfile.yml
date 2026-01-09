@@ -204,30 +204,49 @@ tasks:
           echo "✅ protoc already installed"
         fi
 
-        # Check for hyperscan/vectorscan (needed for catalog service)
-        if ! pkg-config --exists libhs 2>/dev/null; then
-          echo "📦 Installing hyperscan..."
+        # Check for cmake (needed to build vectorscan-rs-sys)
+        if ! command -v cmake >/dev/null 2>&1; then
+          echo "📦 Installing cmake..."
           if [ "$(uname)" = "Darwin" ]; then
-            # macOS: use vectorscan (hyperscan replacement)
             if command -v brew >/dev/null 2>&1; then
-              brew install vectorscan pkg-config
+              brew install cmake
             else
-              echo "⚠️  Homebrew not found. Install vectorscan manually or use Hermit."
+              echo "⚠️  Homebrew not found. Install cmake manually or use Hermit."
             fi
           elif [ "$(uname)" = "Linux" ]; then
-            # Linux: use hyperscan
             if command -v apt-get >/dev/null 2>&1; then
-              sudo apt-get update && sudo apt-get install -y libhyperscan-dev pkg-config
+              sudo apt-get update && sudo apt-get install -y cmake
             elif command -v yum >/dev/null 2>&1; then
-              sudo yum install -y hyperscan-devel pkg-config
+              sudo yum install -y cmake
             else
-              echo "⚠️  Unknown package manager. Install hyperscan manually."
+              echo "⚠️  Unknown package manager. Install cmake manually."
             fi
           else
             echo "⚠️  Unknown platform: $(uname)"
           fi
         else
-          echo "✅ Hyperscan already installed"
+          echo "✅ cmake already installed"
         fi
+
+        # Install boost headers (needed to build vectorscan-rs-sys)
+        echo "📦 Installing boost headers..."
+        if [ "$(uname)" = "Darwin" ]; then
+          if command -v brew >/dev/null 2>&1; then
+            brew install boost
+          else
+            echo "⚠️  Homebrew not found. Install boost manually or use Hermit."
+          fi
+        elif [ "$(uname)" = "Linux" ]; then
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y libboost-dev
+          elif command -v yum >/dev/null 2>&1; then
+            sudo yum install -y boost-devel
+          else
+            echo "⚠️  Unknown package manager. Install boost manually."
+          fi
+        else
+          echo "⚠️  Unknown platform: $(uname)"
+        fi
+        echo "✅ boost installed"
 
         echo "✅ CI setup complete"
