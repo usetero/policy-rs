@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.4](https://github.com/usetero/policy-rs/compare/v1.0.3...v1.0.4) (2026-01-09)
+
+
+### Bug Fixes
+
+* use different vectorscan bindings ([#12](https://github.com/usetero/policy-rs/issues/12)) ([273636d](https://github.com/usetero/policy-rs/commit/273636d55e9ab85df9af85745c146b004a89fdf9))
+
 ## [1.0.3](https://github.com/usetero/policy-rs/compare/v1.0.2...v1.0.3) (2025-12-29)
 
 
