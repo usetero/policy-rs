@@ -105,30 +105,20 @@ impl PolicyEngine {
                 continue;
             };
 
-            // Create scanner and scan for matches
-            let mut scanner =
-                db.database
-                    .create_scanner()
-                    .map_err(|e| PolicyError::CompileError {
-                        reason: format!("failed to create scanner: {}", e),
-                    })?;
+            // Scan for matches
+            let matches = db.database.scan(value.as_bytes())?;
 
-            scanner
-                .scan(value.as_bytes(), |pattern_id, _from, _to, _flags| {
-                    if let Some(pattern_ref) = db.pattern_index.get(pattern_id as usize) {
-                        if key.negated {
-                            // Negated matcher matched = policy is disqualified
-                            disqualified[pattern_ref.policy_index] = true;
-                        } else {
-                            // Positive match
-                            match_counts[pattern_ref.policy_index] += 1;
-                        }
+            for pattern_id in matches {
+                if let Some(pattern_ref) = db.pattern_index.get(pattern_id as usize) {
+                    if key.negated {
+                        // Negated matcher matched = policy is disqualified
+                        disqualified[pattern_ref.policy_index] = true;
+                    } else {
+                        // Positive match
+                        match_counts[pattern_ref.policy_index] += 1;
                     }
-                    vectorscan_rs::Scan::Continue
-                })
-                .map_err(|e| PolicyError::CompileError {
-                    reason: format!("scan error: {}", e),
-                })?;
+                }
+            }
         }
 
         // Handle existence checks
@@ -223,28 +213,18 @@ impl PolicyEngine {
                 continue;
             };
 
-            // Create scanner and scan for matches
-            let mut scanner =
-                db.database
-                    .create_scanner()
-                    .map_err(|e| PolicyError::CompileError {
-                        reason: format!("failed to create scanner: {}", e),
-                    })?;
+            // Scan for matches
+            let matches = db.database.scan(value.as_bytes())?;
 
-            scanner
-                .scan(value.as_bytes(), |pattern_id, _from, _to, _flags| {
-                    if let Some(pattern_ref) = db.pattern_index.get(pattern_id as usize) {
-                        if key.negated {
-                            disqualified[pattern_ref.policy_index] = true;
-                        } else {
-                            match_counts[pattern_ref.policy_index] += 1;
-                        }
+            for pattern_id in matches {
+                if let Some(pattern_ref) = db.pattern_index.get(pattern_id as usize) {
+                    if key.negated {
+                        disqualified[pattern_ref.policy_index] = true;
+                    } else {
+                        match_counts[pattern_ref.policy_index] += 1;
                     }
-                    vectorscan_rs::Scan::Continue
-                })
-                .map_err(|e| PolicyError::CompileError {
-                    reason: format!("scan error: {}", e),
-                })?;
+                }
+            }
         }
 
         // Handle existence checks

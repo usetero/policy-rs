@@ -1,9 +1,9 @@
 //! Compiled policy structures for efficient evaluation.
 
 use std::collections::HashMap;
+use std::ffi::CString;
+use std::ptr;
 use std::sync::Arc;
-
-use vectorscan_rs::{BlockDatabase, Flag, Pattern};
 
 use crate::Policy;
 use crate::error::PolicyError;
@@ -39,7 +39,7 @@ pub struct CompiledPolicy {
     pub enabled: bool,
 }
 
-/// Existence check that can't be handled by Hyperscan.
+/// Existence check that can't be handled by Vectorscan.
 #[derive(Debug, Clone)]
 pub struct ExistenceCheck {
     /// Index into CompiledMatchers::policies.
@@ -52,7 +52,7 @@ pub struct ExistenceCheck {
     pub is_negated: bool,
 }
 
-/// Pattern info for building Hyperscan databases.
+/// Pattern info for building Vectorscan databases.
 #[derive(Debug)]
 pub struct PatternInfo {
     /// The regex pattern.
@@ -61,10 +61,179 @@ pub struct PatternInfo {
     pub policy_index: usize,
 }
 
+/// A compiled Vectorscan database with scratch space.
+pub struct VectorscanDatabase {
+    db: *mut vectorscan_rs_sys::hs_database_t,
+    scratch: *mut vectorscan_rs_sys::hs_scratch_t,
+}
+
+// Safety: The database and scratch pointers are thread-safe for reads.
+// Each thread should have its own scratch space for scanning, but we
+// clone scratch for each scan operation.
+unsafe impl Send for VectorscanDatabase {}
+unsafe impl Sync for VectorscanDatabase {}
+
+impl VectorscanDatabase {
+    /// Compile patterns into a Vectorscan database.
+    fn compile(patterns: &[String], ids: &[u32]) -> Result<Self, PolicyError> {
+        assert_eq!(patterns.len(), ids.len());
+
+        if patterns.is_empty() {
+            return Err(PolicyError::CompileError {
+                reason: "no patterns to compile".to_string(),
+            });
+        }
+
+        // Convert patterns to C strings
+        let c_patterns: Vec<CString> = patterns
+            .iter()
+            .map(|p| {
+                CString::new(p.as_str()).map_err(|e| PolicyError::CompileError {
+                    reason: format!("invalid pattern string: {}", e),
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let pattern_ptrs: Vec<*const i8> = c_patterns.iter().map(|s| s.as_ptr()).collect();
+
+        // All patterns use default flags (0)
+        let flags: Vec<u32> = vec![0; patterns.len()];
+
+        let mut db: *mut vectorscan_rs_sys::hs_database_t = ptr::null_mut();
+        let mut compile_error: *mut vectorscan_rs_sys::hs_compile_error_t = ptr::null_mut();
+
+        // Compile the database
+        let result = unsafe {
+            vectorscan_rs_sys::hs_compile_multi(
+                pattern_ptrs.as_ptr(),
+                flags.as_ptr(),
+                ids.as_ptr(),
+                patterns.len() as u32,
+                vectorscan_rs_sys::HS_MODE_BLOCK,
+                ptr::null(),
+                &mut db,
+                &mut compile_error,
+            )
+        };
+
+        if result != vectorscan_rs_sys::HS_SUCCESS as i32 {
+            let error_msg = if !compile_error.is_null() {
+                let msg = unsafe {
+                    let msg_ptr = (*compile_error).message;
+                    if msg_ptr.is_null() {
+                        "unknown error".to_string()
+                    } else {
+                        std::ffi::CStr::from_ptr(msg_ptr)
+                            .to_string_lossy()
+                            .into_owned()
+                    }
+                };
+                unsafe {
+                    vectorscan_rs_sys::hs_free_compile_error(compile_error);
+                }
+                msg
+            } else {
+                format!("compile failed with code {}", result)
+            };
+
+            return Err(PolicyError::CompileError {
+                reason: format!("failed to compile Vectorscan database: {}", error_msg),
+            });
+        }
+
+        // Allocate scratch space
+        let mut scratch: *mut vectorscan_rs_sys::hs_scratch_t = ptr::null_mut();
+        let result = unsafe { vectorscan_rs_sys::hs_alloc_scratch(db, &mut scratch) };
+
+        if result != vectorscan_rs_sys::HS_SUCCESS as i32 {
+            unsafe {
+                vectorscan_rs_sys::hs_free_database(db);
+            }
+            return Err(PolicyError::CompileError {
+                reason: format!("failed to allocate scratch space: code {}", result),
+            });
+        }
+
+        Ok(VectorscanDatabase { db, scratch })
+    }
+
+    /// Scan data and call the callback for each match.
+    /// Returns the pattern IDs that matched.
+    pub fn scan(&self, data: &[u8]) -> Result<Vec<u32>, PolicyError> {
+        let matches = std::cell::RefCell::new(Vec::new());
+
+        // Clone scratch for this scan (required for thread safety)
+        let mut scan_scratch: *mut vectorscan_rs_sys::hs_scratch_t = ptr::null_mut();
+        let result =
+            unsafe { vectorscan_rs_sys::hs_clone_scratch(self.scratch, &mut scan_scratch) };
+
+        if result != vectorscan_rs_sys::HS_SUCCESS as i32 {
+            return Err(PolicyError::CompileError {
+                reason: format!("failed to clone scratch space: code {}", result),
+            });
+        }
+
+        // Callback that collects pattern IDs
+        unsafe extern "C" fn on_match(
+            id: std::ffi::c_uint,
+            _from: std::ffi::c_ulonglong,
+            _to: std::ffi::c_ulonglong,
+            _flags: std::ffi::c_uint,
+            context: *mut std::ffi::c_void,
+        ) -> std::ffi::c_int {
+            // Safety: context is a valid pointer to RefCell<Vec<u32>> passed from scan()
+            unsafe {
+                let matches = &*(context as *const std::cell::RefCell<Vec<u32>>);
+                matches.borrow_mut().push(id);
+            }
+            0 // Continue scanning
+        }
+
+        let result = unsafe {
+            vectorscan_rs_sys::hs_scan(
+                self.db,
+                data.as_ptr() as *const i8,
+                data.len() as u32,
+                0,
+                scan_scratch,
+                Some(on_match),
+                &matches as *const _ as *mut std::ffi::c_void,
+            )
+        };
+
+        unsafe {
+            vectorscan_rs_sys::hs_free_scratch(scan_scratch);
+        }
+
+        if result != vectorscan_rs_sys::HS_SUCCESS as i32
+            && result != vectorscan_rs_sys::HS_SCAN_TERMINATED as i32
+        {
+            return Err(PolicyError::CompileError {
+                reason: format!("scan failed with code {}", result),
+            });
+        }
+
+        Ok(matches.into_inner())
+    }
+}
+
+impl Drop for VectorscanDatabase {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.scratch.is_null() {
+                vectorscan_rs_sys::hs_free_scratch(self.scratch);
+            }
+            if !self.db.is_null() {
+                vectorscan_rs_sys::hs_free_database(self.db);
+            }
+        }
+    }
+}
+
 /// A compiled Vectorscan database with its pattern index.
 pub struct CompiledDatabase {
     /// The Vectorscan database.
-    pub database: BlockDatabase,
+    pub database: VectorscanDatabase,
     /// Maps pattern_id to policy reference.
     pub pattern_index: Vec<PolicyMatchRef>,
 }
@@ -194,26 +363,19 @@ impl PatternGroups {
                 continue;
             }
 
-            let mut vs_patterns = Vec::with_capacity(patterns.len());
+            let mut pattern_strings = Vec::with_capacity(patterns.len());
+            let mut pattern_ids = Vec::with_capacity(patterns.len());
             let mut pattern_index = Vec::with_capacity(patterns.len());
 
             for (pattern_id, info) in patterns.into_iter().enumerate() {
-                let vs_pattern = Pattern::new(
-                    info.pattern.as_bytes().to_vec(),
-                    Flag::default(),
-                    Some(pattern_id as u32),
-                );
-
-                vs_patterns.push(vs_pattern);
+                pattern_strings.push(info.pattern);
+                pattern_ids.push(pattern_id as u32);
                 pattern_index.push(PolicyMatchRef {
                     policy_index: info.policy_index,
                 });
             }
 
-            let database =
-                BlockDatabase::new(vs_patterns).map_err(|e| PolicyError::CompileError {
-                    reason: format!("failed to compile Vectorscan database: {}", e),
-                })?;
+            let database = VectorscanDatabase::compile(&pattern_strings, &pattern_ids)?;
 
             databases.insert(
                 key,
