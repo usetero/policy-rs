@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/usetero/policy-rs/compare/v1.0.5...v1.1.0) (2026-01-09)
+
+
+### Features
+
+* publish a config file format to be used elsewhere ([#18](https://github.com/usetero/policy-rs/issues/18)) ([351eb66](https://github.com/usetero/policy-rs/commit/351eb66a302b8c5c90f356f83fbd838e5a663206))
+
 ## [1.0.5](https://github.com/usetero/policy-rs/compare/v1.0.4...v1.0.5) (2026-01-09)
 
 
