@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use hyperscan_tokio::{DatabaseBuilder, Pattern, Scanner};
+use vectorscan_rs::{BlockDatabase, Flag, Pattern};
 
 use crate::Policy;
 use crate::error::PolicyError;
@@ -61,10 +61,10 @@ pub struct PatternInfo {
     pub policy_index: usize,
 }
 
-/// A compiled Hyperscan database with its pattern index.
+/// A compiled Vectorscan database with its pattern index.
 pub struct CompiledDatabase {
-    /// The Hyperscan scanner.
-    pub scanner: Scanner,
+    /// The Vectorscan database.
+    pub database: BlockDatabase,
     /// Maps pattern_id to policy reference.
     pub pattern_index: Vec<PolicyMatchRef>,
 }
@@ -185,7 +185,7 @@ impl PatternGroups {
         Ok(result)
     }
 
-    /// Compile pattern groups into Hyperscan databases.
+    /// Compile pattern groups into Vectorscan databases.
     pub fn compile(self) -> Result<CompiledMatchers, PolicyError> {
         let mut databases = HashMap::new();
 
@@ -194,35 +194,31 @@ impl PatternGroups {
                 continue;
             }
 
-            let mut builder = DatabaseBuilder::new();
+            let mut vs_patterns = Vec::with_capacity(patterns.len());
             let mut pattern_index = Vec::with_capacity(patterns.len());
 
             for (pattern_id, info) in patterns.into_iter().enumerate() {
-                let hs_pattern = Pattern::new(&info.pattern)
-                    .id(pattern_id as u32)
-                    .build()
-                    .map_err(|e| PolicyError::CompileError {
-                        reason: format!("failed to build pattern '{}': {}", info.pattern, e),
-                    })?;
+                let vs_pattern = Pattern::new(
+                    info.pattern.as_bytes().to_vec(),
+                    Flag::default(),
+                    Some(pattern_id as u32),
+                );
 
-                builder = builder.add_pattern(hs_pattern);
+                vs_patterns.push(vs_pattern);
                 pattern_index.push(PolicyMatchRef {
                     policy_index: info.policy_index,
                 });
             }
 
-            let db = builder.build().map_err(|e| PolicyError::CompileError {
-                reason: format!("failed to compile Hyperscan database: {}", e),
-            })?;
-
-            let scanner = Scanner::new(db).map_err(|e| PolicyError::CompileError {
-                reason: format!("failed to create scanner: {}", e),
-            })?;
+            let database =
+                BlockDatabase::new(vs_patterns).map_err(|e| PolicyError::CompileError {
+                    reason: format!("failed to compile Vectorscan database: {}", e),
+                })?;
 
             databases.insert(
                 key,
                 CompiledDatabase {
-                    scanner,
+                    database,
                     pattern_index,
                 },
             );

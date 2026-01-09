@@ -1,4 +1,4 @@
-//! Policy evaluation engine using Hyperscan for high-performance matching.
+//! Policy evaluation engine using Vectorscan for high-performance matching.
 
 mod compiled;
 mod keep;
@@ -97,7 +97,7 @@ impl PolicyEngine {
         let mut match_counts: Vec<usize> = vec![0; policy_count];
         let mut disqualified: Vec<bool> = vec![false; policy_count];
 
-        // Scan each Hyperscan database
+        // Scan each Vectorscan database
         for (key, db) in &compiled.databases {
             // Get field value from log
             let Some(value) = log.get_field(&key.field) else {
@@ -105,27 +105,30 @@ impl PolicyEngine {
                 continue;
             };
 
-            // Copy value to owned string for async scan (hyperscan requires 'static)
-            let value_owned = value.to_string();
+            // Create scanner and scan for matches
+            let mut scanner =
+                db.database
+                    .create_scanner()
+                    .map_err(|e| PolicyError::CompileError {
+                        reason: format!("failed to create scanner: {}", e),
+                    })?;
 
-            // Scan for matches
-            let matches = db.scanner.scan_bytes(value_owned).await.map_err(|e| {
-                PolicyError::CompileError {
-                    reason: format!("scan error: {}", e),
-                }
-            })?;
-
-            for m in matches {
-                if let Some(pattern_ref) = db.pattern_index.get(m.pattern_id as usize) {
-                    if key.negated {
-                        // Negated matcher matched = policy is disqualified
-                        disqualified[pattern_ref.policy_index] = true;
-                    } else {
-                        // Positive match
-                        match_counts[pattern_ref.policy_index] += 1;
+            scanner
+                .scan(value.as_bytes(), |pattern_id, _from, _to, _flags| {
+                    if let Some(pattern_ref) = db.pattern_index.get(pattern_id as usize) {
+                        if key.negated {
+                            // Negated matcher matched = policy is disqualified
+                            disqualified[pattern_ref.policy_index] = true;
+                        } else {
+                            // Positive match
+                            match_counts[pattern_ref.policy_index] += 1;
+                        }
                     }
-                }
-            }
+                    vectorscan_rs::Scan::Continue
+                })
+                .map_err(|e| PolicyError::CompileError {
+                    reason: format!("scan error: {}", e),
+                })?;
         }
 
         // Handle existence checks
@@ -213,30 +216,35 @@ impl PolicyEngine {
         let mut match_counts: Vec<usize> = vec![0; policy_count];
         let mut disqualified: Vec<bool> = vec![false; policy_count];
 
-        // Scan each Hyperscan database
+        // Scan each Vectorscan database
         for (key, db) in &compiled.databases {
             // Get field value from log
             let Some(value) = log.get_field(&key.field) else {
                 continue;
             };
 
-            let value_owned = value.to_string();
+            // Create scanner and scan for matches
+            let mut scanner =
+                db.database
+                    .create_scanner()
+                    .map_err(|e| PolicyError::CompileError {
+                        reason: format!("failed to create scanner: {}", e),
+                    })?;
 
-            let matches = db.scanner.scan_bytes(value_owned).await.map_err(|e| {
-                PolicyError::CompileError {
-                    reason: format!("scan error: {}", e),
-                }
-            })?;
-
-            for m in matches {
-                if let Some(pattern_ref) = db.pattern_index.get(m.pattern_id as usize) {
-                    if key.negated {
-                        disqualified[pattern_ref.policy_index] = true;
-                    } else {
-                        match_counts[pattern_ref.policy_index] += 1;
+            scanner
+                .scan(value.as_bytes(), |pattern_id, _from, _to, _flags| {
+                    if let Some(pattern_ref) = db.pattern_index.get(pattern_id as usize) {
+                        if key.negated {
+                            disqualified[pattern_ref.policy_index] = true;
+                        } else {
+                            match_counts[pattern_ref.policy_index] += 1;
+                        }
                     }
-                }
-            }
+                    vectorscan_rs::Scan::Continue
+                })
+                .map_err(|e| PolicyError::CompileError {
+                    reason: format!("scan error: {}", e),
+                })?;
         }
 
         // Handle existence checks
