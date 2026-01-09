@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.5](https://github.com/usetero/policy-rs/compare/v1.0.4...v1.0.5) (2026-01-09)
+
+
+### Bug Fixes
+
+* update to use trusted auth ([#16](https://github.com/usetero/policy-rs/issues/16)) ([dfa7647](https://github.com/usetero/policy-rs/commit/dfa76477c1ddf4d8c4d15d3b28ce52f2319241d4))
+
 ## [1.0.4](https://github.com/usetero/policy-rs/compare/v1.0.3...v1.0.4) (2026-01-09)
 
 
