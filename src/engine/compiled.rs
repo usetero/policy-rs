@@ -94,7 +94,8 @@ impl VectorscanDatabase {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let pattern_ptrs: Vec<*const i8> = c_patterns.iter().map(|s| s.as_ptr()).collect();
+        let pattern_ptrs: Vec<*const std::ffi::c_char> =
+            c_patterns.iter().map(|s| s.as_ptr()).collect();
 
         // All patterns use default flags (0)
         let flags: Vec<u32> = vec![0; patterns.len()];
@@ -192,7 +193,7 @@ impl VectorscanDatabase {
         let result = unsafe {
             vectorscan_rs_sys::hs_scan(
                 self.db,
-                data.as_ptr() as *const i8,
+                data.as_ptr() as *const std::ffi::c_char,
                 data.len() as u32,
                 0,
                 scan_scratch,
