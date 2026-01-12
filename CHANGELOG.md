@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/usetero/policy-rs/compare/v1.1.0...v1.1.1) (2026-01-12)
+
+
+### Bug Fixes
+
+* type on arm64 failed build ([#20](https://github.com/usetero/policy-rs/issues/20)) ([73b83cb](https://github.com/usetero/policy-rs/commit/73b83cb26c20829b3d43eca4a7fa55b85a25eb75))
+
 ## [1.1.0](https://github.com/usetero/policy-rs/compare/v1.0.5...v1.1.0) (2026-01-09)
 
 
