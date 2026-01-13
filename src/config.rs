@@ -130,8 +130,16 @@ impl ProviderConfig {
 
     /// Create a provider from this configuration and register it with the registry.
     ///
+    /// This is an async function that performs the initial policy fetch before
+    /// registering the provider. For HTTP and gRPC providers, this ensures
+    /// policies are available immediately after registration without blocking.
+    ///
     /// Returns the provider ID assigned by the registry.
-    pub fn register(&self, registry: &PolicyRegistry) -> Result<ProviderId, PolicyError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the initial policy fetch fails or if registration fails.
+    pub async fn register(&self, registry: &PolicyRegistry) -> Result<ProviderId, PolicyError> {
         match self {
             ProviderConfig::File(config) => {
                 let provider = FileProvider::new(&config.path);
@@ -165,7 +173,8 @@ impl ProviderConfig {
                     http_config = http_config.content_type(content_type);
                 }
 
-                let provider = HttpProvider::new(http_config);
+                // Use async initialization to avoid blocking
+                let provider = HttpProvider::new_with_initial_fetch(http_config).await?;
                 registry.subscribe(&provider)
             }
             #[cfg(feature = "grpc")]
@@ -185,7 +194,8 @@ impl ProviderConfig {
                     grpc_config = grpc_config.poll_interval(Duration::from_secs(secs));
                 }
 
-                let provider = GrpcProvider::new(grpc_config);
+                // Use async initialization to avoid blocking
+                let provider = GrpcProvider::new_with_initial_fetch(grpc_config).await?;
                 registry.subscribe(&provider)
             }
         }
@@ -194,7 +204,8 @@ impl ProviderConfig {
 
 /// Register multiple providers from configuration.
 ///
-/// This is a convenience function that registers all providers from a list of configurations.
+/// This is an async convenience function that registers all providers from a list of configurations.
+/// Providers are registered sequentially to ensure deterministic ordering.
 /// Returns a vector of provider IDs in the same order as the input configurations.
 ///
 /// # Example
@@ -205,13 +216,18 @@ impl ProviderConfig {
 ///
 /// let configs: Vec<ProviderConfig> = serde_json::from_str(json)?;
 /// let registry = PolicyRegistry::new();
-/// let provider_ids = register_providers(&configs, &registry)?;
+/// let provider_ids = register_providers(&configs, &registry).await?;
 /// ```
-pub fn register_providers(
+pub async fn register_providers(
     configs: &[ProviderConfig],
     registry: &PolicyRegistry,
 ) -> Result<Vec<ProviderId>, PolicyError> {
-    configs.iter().map(|c| c.register(registry)).collect()
+    let mut provider_ids = Vec::with_capacity(configs.len());
+    for config in configs {
+        let id = config.register(registry).await?;
+        provider_ids.push(id);
+    }
+    Ok(provider_ids)
 }
 
 #[cfg(test)]
@@ -325,15 +341,15 @@ mod tests {
         assert_eq!(config.id(), "test-id");
     }
 
-    #[test]
-    fn register_file_provider() {
+    #[tokio::test]
+    async fn register_file_provider() {
         let config = ProviderConfig::File(FileProviderConfig {
             id: "test".to_string(),
             path: "testdata/policies.json".to_string(),
         });
 
         let registry = PolicyRegistry::new();
-        let provider_id = config.register(&registry).unwrap();
+        let provider_id = config.register(&registry).await.unwrap();
 
         // Verify provider was registered
         assert_eq!(registry.provider_count(), 1);
@@ -346,8 +362,8 @@ mod tests {
         let _ = provider_id;
     }
 
-    #[test]
-    fn register_multiple_providers() {
+    #[tokio::test]
+    async fn register_multiple_providers() {
         let configs = vec![
             ProviderConfig::File(FileProviderConfig {
                 id: "provider1".to_string(),
@@ -360,7 +376,7 @@ mod tests {
         ];
 
         let registry = PolicyRegistry::new();
-        let provider_ids = register_providers(&configs, &registry).unwrap();
+        let provider_ids = register_providers(&configs, &registry).await.unwrap();
 
         assert_eq!(provider_ids.len(), 2);
         assert_eq!(registry.provider_count(), 2);

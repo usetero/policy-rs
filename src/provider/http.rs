@@ -108,10 +108,16 @@ pub struct HttpProvider {
     running: AtomicBool,
     /// Stats collector for reporting policy statistics.
     stats_collector: RwLock<Option<StatsCollector>>,
+    /// Cached policies from initial async fetch (used to avoid blocking in subscribe).
+    initial_policies: RwLock<Option<Vec<Policy>>>,
 }
 
 impl HttpProvider {
     /// Create a new HTTP provider with the given configuration.
+    ///
+    /// This is synchronous and does not perform an initial fetch.
+    /// Use [`HttpProvider::new_with_initial_fetch`] if you need to fetch
+    /// policies during construction.
     pub fn new(config: HttpProviderConfig) -> Self {
         let client = reqwest::Client::new();
         Self {
@@ -121,7 +127,33 @@ impl HttpProvider {
             last_sync_timestamp: RwLock::new(0),
             running: AtomicBool::new(false),
             stats_collector: RwLock::new(None),
+            initial_policies: RwLock::new(None),
         }
+    }
+
+    /// Create a new HTTP provider and perform an initial fetch.
+    ///
+    /// This async constructor fetches policies immediately during construction,
+    /// which is useful when you need policies available before starting the
+    /// polling loop.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the initial HTTP fetch fails.
+    pub async fn new_with_initial_fetch(config: HttpProviderConfig) -> Result<Self, PolicyError> {
+        let provider = Self::new(config);
+        // Perform initial sync and cache the policies to avoid blocking in subscribe()
+        let policies = provider.sync(true).await?;
+        *provider.initial_policies.write().unwrap() = Some(policies);
+        Ok(provider)
+    }
+
+    /// Fetch policies from the HTTP endpoint.
+    ///
+    /// This is an async method that can be used to manually trigger a sync.
+    /// Returns the fetched policies.
+    pub async fn fetch_policies(&self) -> Result<Vec<Policy>, PolicyError> {
+        self.sync(true).await
     }
 
     /// Set the stats collector for reporting policy statistics.
@@ -402,8 +434,14 @@ impl PolicyProvider for HttpProvider {
     }
 
     fn subscribe(&self, callback: PolicyCallback) -> Result<(), PolicyError> {
-        // Do an initial sync
-        let policies = self.load()?;
+        // Use cached policies from async init if available, otherwise do a blocking load
+        let policies = self
+            .initial_policies
+            .write()
+            .unwrap()
+            .take()
+            .map(Ok)
+            .unwrap_or_else(|| self.load())?;
         callback(policies);
 
         // Get the initial hash to track changes

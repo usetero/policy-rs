@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create registry and register all providers from config
     let registry = PolicyRegistry::new();
-    let provider_ids = register_providers(&app_config.policy_providers, &registry)?;
+    let provider_ids = register_providers(&app_config.policy_providers, &registry).await?;
 
     println!("Registered {} providers", provider_ids.len());
     println!("Total policies loaded: {}", registry.snapshot().len());
