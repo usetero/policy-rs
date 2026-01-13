@@ -58,16 +58,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .content_type(ContentType::Json)
         .client_metadata(client_metadata);
 
-    // Create the provider
-    let provider = Arc::new(HttpProvider::new(config));
+    // Create the provider with async initialization
+    let provider = Arc::new(HttpProvider::new_with_initial_fetch(config).await?);
 
     // Create a registry and subscribe to the provider
-    // Note: subscribe() uses block_on internally, so we run it via spawn_blocking
     let registry = Arc::new(PolicyRegistry::new());
-    let registry_clone = registry.clone();
-    let provider_clone = provider.clone();
-    tokio::task::spawn_blocking(move || registry_clone.subscribe(provider_clone.as_ref()))
-        .await??;
+    registry.subscribe(provider.as_ref())?;
 
     println!(
         "Loaded {} policies from HTTP endpoint",
