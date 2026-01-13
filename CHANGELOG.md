@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.3](https://github.com/usetero/policy-rs/compare/v1.1.2...v1.1.3) (2026-01-13)
+
+
+### Bug Fixes
+
+* provider methods should be async and non-blocking ([#24](https://github.com/usetero/policy-rs/issues/24)) ([87c51ce](https://github.com/usetero/policy-rs/commit/87c51ce29e1a9769a26f352105b7e0652bdd0a61))
+
 ## [1.1.2](https://github.com/usetero/policy-rs/compare/v1.1.1...v1.1.2) (2026-01-13)
 
 
