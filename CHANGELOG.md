@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/usetero/policy-rs/compare/v1.1.1...v1.1.2) (2026-01-13)
+
+
+### Bug Fixes
+
+* remove libssl dep ([#22](https://github.com/usetero/policy-rs/issues/22)) ([b7423e4](https://github.com/usetero/policy-rs/commit/b7423e4c342b78d0cce469b2330714a4c9bf5d63))
+
 ## [1.1.1](https://github.com/usetero/policy-rs/compare/v1.1.0...v1.1.1) (2026-01-12)
 
 
