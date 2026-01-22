@@ -29,6 +29,7 @@ pub use registry::{
     PolicyEntry, PolicyRegistry, PolicySnapshot, PolicyStats, PolicyStatsSnapshot, ProviderHandle,
     ProviderId, TransformStageStats,
 };
+pub use std::borrow::Cow;
 
 #[cfg(test)]
 mod tests {
