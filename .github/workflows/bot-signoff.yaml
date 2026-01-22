@@ -7,7 +7,7 @@
 # workflow runs signoff for them automatically.
 #
 # When it runs:
-# - Bot PRs (Renovate, Dependabot, tero[bot]) - automatic
+# - Bot PRs (Renovate, Dependabot, tero[bot], release-please[bot], github-actions[bot]) - automatic
 # - Master branch pushes - ensures merged code still passes
 # - PRs with 'ci' label - opt-in if you need to verify something in CI
 # - Manual trigger - for testing
@@ -41,7 +41,7 @@ concurrency:
 jobs:
   validate:
     # Only run for:
-    # 1. Bot PRs (renovate[bot], dependabot[bot], tero[bot])
+    # 1. Bot PRs (renovate[bot], dependabot[bot], tero[bot], release-please[bot], github-actions[bot])
     # 2. Master branch pushes
     # 3. Manual trigger via 'ci' label
     # 4. Workflow dispatch/call
@@ -49,6 +49,8 @@ jobs:
       github.actor == 'renovate[bot]' ||
       github.actor == 'dependabot[bot]' ||
       github.actor == 'tero[bot]' ||
+      github.actor == 'release-please[bot]' ||
+      github.actor == 'github-actions[bot]' ||
       github.ref == 'refs/heads/master' ||
       contains(github.event.pull_request.labels.*.name, 'ci') ||
       github.event_name == 'workflow_dispatch' ||
