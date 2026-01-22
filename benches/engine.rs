@@ -6,6 +6,7 @@ use policy_rs::proto::tero::policy::v1::{
     Policy as ProtoPolicy, log_add, log_matcher, log_redact, log_remove, log_rename,
 };
 use policy_rs::{LogFieldSelector, Matchable, Policy, PolicyEngine, PolicyRegistry, Transformable};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use tokio::runtime::Runtime;
 
@@ -32,14 +33,16 @@ impl BenchLog {
 }
 
 impl Matchable for BenchLog {
-    fn get_field(&self, field: &LogFieldSelector) -> Option<&str> {
+    fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
         match field {
             LogFieldSelector::Simple(log_field) => match log_field {
-                LogField::Body => Some(&self.body),
-                LogField::SeverityText => Some(&self.severity),
+                LogField::Body => Some(Cow::Borrowed(&self.body)),
+                LogField::SeverityText => Some(Cow::Borrowed(&self.severity)),
                 _ => None,
             },
-            LogFieldSelector::LogAttribute(key) => self.attributes.get(key).map(|s| s.as_str()),
+            LogFieldSelector::LogAttribute(key) => {
+                self.attributes.get(key).map(|s| Cow::Borrowed(s.as_str()))
+            }
             _ => None,
         }
     }

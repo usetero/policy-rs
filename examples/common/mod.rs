@@ -4,6 +4,7 @@
 
 use policy_rs::proto::tero::policy::v1::LogField;
 use policy_rs::{LogFieldSelector, Matchable, Transformable};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// A simple log record for demonstration.
@@ -38,17 +39,20 @@ impl LogRecord {
 }
 
 impl Matchable for LogRecord {
-    fn get_field(&self, field: &LogFieldSelector) -> Option<&str> {
+    fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
         match field {
             LogFieldSelector::Simple(log_field) => match log_field {
-                LogField::Body => self.body.as_deref(),
-                LogField::SeverityText => self.severity.as_deref(),
+                LogField::Body => self.body.as_deref().map(Cow::Borrowed),
+                LogField::SeverityText => self.severity.as_deref().map(Cow::Borrowed),
                 _ => None,
             },
-            LogFieldSelector::LogAttribute(key) => self.attributes.get(key).map(|s| s.as_str()),
-            LogFieldSelector::ResourceAttribute(key) => {
-                self.resource_attributes.get(key).map(|s| s.as_str())
+            LogFieldSelector::LogAttribute(key) => {
+                self.attributes.get(key).map(|s| Cow::Borrowed(s.as_str()))
             }
+            LogFieldSelector::ResourceAttribute(key) => self
+                .resource_attributes
+                .get(key)
+                .map(|s| Cow::Borrowed(s.as_str())),
             LogFieldSelector::ScopeAttribute(_) => None,
         }
     }

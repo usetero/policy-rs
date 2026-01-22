@@ -401,6 +401,7 @@ mod tests {
         log_matcher, log_redact, log_remove,
     };
     use crate::registry::PolicyRegistry;
+    use std::borrow::Cow;
     use std::collections::HashMap;
 
     /// Test log record implementation.
@@ -445,19 +446,21 @@ mod tests {
     }
 
     impl Matchable for TestLog {
-        fn get_field(&self, field: &LogFieldSelector) -> Option<&str> {
+        fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
             match field {
                 LogFieldSelector::Simple(log_field) => match log_field {
-                    LogField::Body => self.body.as_deref(),
-                    LogField::SeverityText => self.severity_text.as_deref(),
+                    LogField::Body => self.body.as_deref().map(Cow::Borrowed),
+                    LogField::SeverityText => self.severity_text.as_deref().map(Cow::Borrowed),
                     _ => None,
                 },
-                LogFieldSelector::LogAttribute(key) => {
-                    self.log_attributes.get(key).map(|s| s.as_str())
-                }
-                LogFieldSelector::ResourceAttribute(key) => {
-                    self.resource_attributes.get(key).map(|s| s.as_str())
-                }
+                LogFieldSelector::LogAttribute(key) => self
+                    .log_attributes
+                    .get(key)
+                    .map(|s| Cow::Borrowed(s.as_str())),
+                LogFieldSelector::ResourceAttribute(key) => self
+                    .resource_attributes
+                    .get(key)
+                    .map(|s| Cow::Borrowed(s.as_str())),
                 LogFieldSelector::ScopeAttribute(_) => None,
             }
         }

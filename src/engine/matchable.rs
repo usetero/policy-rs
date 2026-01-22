@@ -1,5 +1,7 @@
 //! Matchable trait for field access.
 
+use std::borrow::Cow;
+
 use crate::field::LogFieldSelector;
 
 /// Trait for types that can be matched against policies.
@@ -10,13 +12,16 @@ pub trait Matchable {
     /// Get a field value by selector.
     ///
     /// Returns `None` for fields that don't exist or aren't applicable.
-    fn get_field(&self, field: &LogFieldSelector) -> Option<&str>;
+    /// Returns `Cow::Borrowed` for fields that exist as stored strings,
+    /// or `Cow::Owned` for computed/parsed fields.
+    fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::proto::tero::policy::v1::LogField;
+    use std::borrow::Cow;
     use std::collections::HashMap;
 
     /// A simple test log record for testing.
@@ -28,19 +33,21 @@ mod tests {
     }
 
     impl Matchable for TestLog {
-        fn get_field(&self, field: &LogFieldSelector) -> Option<&str> {
+        fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
             match field {
                 LogFieldSelector::Simple(log_field) => match log_field {
-                    LogField::Body => Some(&self.body),
-                    LogField::SeverityText => Some(&self.severity_text),
+                    LogField::Body => Some(Cow::Borrowed(&self.body)),
+                    LogField::SeverityText => Some(Cow::Borrowed(&self.severity_text)),
                     _ => None,
                 },
-                LogFieldSelector::LogAttribute(key) => {
-                    self.log_attributes.get(key).map(|s| s.as_str())
-                }
-                LogFieldSelector::ResourceAttribute(key) => {
-                    self.resource_attributes.get(key).map(|s| s.as_str())
-                }
+                LogFieldSelector::LogAttribute(key) => self
+                    .log_attributes
+                    .get(key)
+                    .map(|s| Cow::Borrowed(s.as_str())),
+                LogFieldSelector::ResourceAttribute(key) => self
+                    .resource_attributes
+                    .get(key)
+                    .map(|s| Cow::Borrowed(s.as_str())),
                 LogFieldSelector::ScopeAttribute(_) => None,
             }
         }
@@ -57,11 +64,11 @@ mod tests {
 
         assert_eq!(
             log.get_field(&LogFieldSelector::Simple(LogField::Body)),
-            Some("test message")
+            Some(Cow::Borrowed("test message"))
         );
         assert_eq!(
             log.get_field(&LogFieldSelector::Simple(LogField::SeverityText)),
-            Some("ERROR")
+            Some(Cow::Borrowed("ERROR"))
         );
         assert_eq!(
             log.get_field(&LogFieldSelector::Simple(LogField::TraceId)),
@@ -86,17 +93,45 @@ mod tests {
 
         assert_eq!(
             log.get_field(&LogFieldSelector::LogAttribute("ddsource".to_string())),
-            Some("nginx")
+            Some(Cow::Borrowed("nginx"))
         );
         assert_eq!(
             log.get_field(&LogFieldSelector::ResourceAttribute(
                 "service.name".to_string()
             )),
-            Some("my-service")
+            Some(Cow::Borrowed("my-service"))
         );
         assert_eq!(
             log.get_field(&LogFieldSelector::LogAttribute("missing".to_string())),
             None
         );
+    }
+
+    #[test]
+    fn get_field_returns_owned_value() {
+        // Test that Cow::Owned values work correctly
+        struct ComputedLog;
+
+        impl Matchable for ComputedLog {
+            fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
+                match field {
+                    LogFieldSelector::Simple(LogField::Body) => {
+                        Some(Cow::Owned("computed value".to_string()))
+                    }
+                    _ => None,
+                }
+            }
+        }
+
+        let log = ComputedLog;
+        let value = log.get_field(&LogFieldSelector::Simple(LogField::Body));
+        assert_eq!(value.as_deref(), Some("computed value"));
+
+        // Verify it's actually an owned value
+        if let Some(Cow::Owned(s)) = value {
+            assert_eq!(s, "computed value");
+        } else {
+            panic!("Expected Cow::Owned");
+        }
     }
 }
