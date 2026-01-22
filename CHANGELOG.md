@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/usetero/policy-rs/compare/v1.1.3...v1.2.0) (2026-01-22)
+
+
+### Features
+
+* use owned references for more flexibility ([#27](https://github.com/usetero/policy-rs/issues/27)) ([7336b2c](https://github.com/usetero/policy-rs/commit/7336b2c1ec36b2dce3a661053385b751a3ef58a7))
+
+
+### Bug Fixes
+
+* ci cd installation ([#14](https://github.com/usetero/policy-rs/issues/14)) ([ea856c8](https://github.com/usetero/policy-rs/commit/ea856c84701dd1b9cf2f5aea9c14d20358ac2fb1))
+
 ## [1.1.3](https://github.com/usetero/policy-rs/compare/v1.1.2...v1.1.3) (2026-01-13)
 
 
