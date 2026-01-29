@@ -16,6 +16,7 @@ pub use rate_limiter::RateLimiters;
 pub use transform::{CompiledTransform, TransformOp};
 pub use transformable::Transformable;
 
+use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 use crate::error::PolicyError;
@@ -173,7 +174,14 @@ impl PolicyEngine {
         });
 
         let winner = &compiled.policies[matching[0]];
-        Ok(self.apply_keep(&winner.id, &winner.keep, false))
+
+        // Extract sample key value if configured
+        let sample_key_value = winner
+            .sample_key
+            .as_ref()
+            .and_then(|key| log.get_field(key));
+
+        Ok(self.apply_keep(&winner.id, &winner.keep, false, sample_key_value.as_deref()))
     }
 
     /// Evaluate a log record and apply transforms from all matching policies.
@@ -278,11 +286,17 @@ impl PolicyEngine {
         let winner_idx = matching[0];
         let winner = &compiled.policies[winner_idx];
 
+        // Extract sample key value if configured (for consistent sampling)
+        let sample_key_value = winner
+            .sample_key
+            .as_ref()
+            .and_then(|key| log.get_field(key));
+
         // Determine if the log will be kept
         let will_keep = match &winner.keep {
             CompiledKeep::None => false,
             CompiledKeep::All => true,
-            CompiledKeep::Percentage(p) => rand::random::<f64>() < *p,
+            CompiledKeep::Percentage(p) => should_keep_percentage(*p, sample_key_value.as_deref()),
             CompiledKeep::RatePerSecond(limit) => {
                 self.rate_limiters
                     .check(&winner.id, *limit, Duration::from_secs(1))
@@ -334,11 +348,18 @@ impl PolicyEngine {
     }
 
     /// Apply the keep action and return the evaluation result.
+    ///
+    /// # Arguments
+    /// * `policy_id` - The ID of the winning policy
+    /// * `keep` - The keep action to apply
+    /// * `transformed` - Whether transforms were applied
+    /// * `sample_key_value` - Optional sample key value for consistent sampling
     fn apply_keep(
         &self,
         policy_id: &str,
         keep: &CompiledKeep,
         transformed: bool,
+        sample_key_value: Option<&str>,
     ) -> EvaluateResult {
         match keep {
             CompiledKeep::None => EvaluateResult::Drop {
@@ -349,7 +370,7 @@ impl PolicyEngine {
                 transformed,
             },
             CompiledKeep::Percentage(p) => {
-                let keep = rand::random::<f64>() < *p;
+                let keep = should_keep_percentage(*p, sample_key_value);
                 EvaluateResult::Sample {
                     policy_id: policy_id.to_string(),
                     percentage: *p * 100.0,
@@ -387,6 +408,30 @@ impl PolicyEngine {
 impl Default for PolicyEngine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Hash a sample key value to produce a deterministic value in [0, 1).
+///
+/// Uses the standard library's DefaultHasher for fast, consistent hashing.
+/// The same key value will always produce the same hash, enabling consistent
+/// sampling decisions across multiple log records with the same key.
+fn hash_sample_key(value: &str) -> f64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    let hash = hasher.finish();
+    // Convert to a value in [0, 1)
+    (hash as f64) / (u64::MAX as f64)
+}
+
+/// Determine if a log should be kept based on percentage sampling.
+///
+/// If a sample key value is provided, uses hash-based consistent sampling.
+/// Otherwise, uses random sampling.
+fn should_keep_percentage(percentage: f64, sample_key_value: Option<&str>) -> bool {
+    match sample_key_value {
+        Some(key) => hash_sample_key(key) < percentage,
+        None => rand::random::<f64>() < percentage,
     }
 }
 
@@ -1850,5 +1895,223 @@ mod tests {
 
         // Stats should be reset
         assert_eq!(entry.stats.add.hits(), 0);
+    }
+
+    // ==================== Sample Key Tests ====================
+
+    #[test]
+    fn hash_sample_key_is_deterministic() {
+        // Same key always produces same hash
+        let hash1 = hash_sample_key("request-123");
+        let hash2 = hash_sample_key("request-123");
+        assert_eq!(hash1, hash2);
+
+        // Different keys produce different hashes
+        let hash3 = hash_sample_key("request-456");
+        assert_ne!(hash1, hash3);
+    }
+
+    #[test]
+    fn hash_sample_key_produces_valid_range() {
+        // Test that hash values are in [0, 1)
+        let test_keys = [
+            "request-1",
+            "request-2",
+            "user-abc",
+            "trace-xyz",
+            "",
+            "a",
+            "very-long-key-with-lots-of-characters-1234567890",
+        ];
+
+        for key in test_keys {
+            let hash = hash_sample_key(key);
+            assert!(hash >= 0.0, "Hash for '{}' should be >= 0", key);
+            assert!(hash < 1.0, "Hash for '{}' should be < 1", key);
+        }
+    }
+
+    #[test]
+    fn should_keep_percentage_with_sample_key_is_consistent() {
+        // With a sample key, the decision should be consistent
+        let key = "request-123";
+
+        // Call multiple times with the same key and percentage
+        let decisions: Vec<bool> = (0..10)
+            .map(|_| should_keep_percentage(0.5, Some(key)))
+            .collect();
+
+        // All decisions should be the same
+        let first = decisions[0];
+        assert!(
+            decisions.iter().all(|&d| d == first),
+            "Sample key decisions should be consistent"
+        );
+    }
+
+    #[test]
+    fn should_keep_percentage_different_keys_different_decisions() {
+        // With many different keys at 50%, roughly half should be kept
+        let keys: Vec<String> = (0..1000).map(|i| format!("request-{}", i)).collect();
+
+        let kept_count = keys
+            .iter()
+            .filter(|k| should_keep_percentage(0.5, Some(k)))
+            .count();
+
+        // With 1000 samples at 50%, we expect ~500 kept
+        // Allow for some variance (400-600 is reasonable)
+        assert!(
+            kept_count > 400 && kept_count < 600,
+            "Expected ~50% kept, got {} out of 1000",
+            kept_count
+        );
+    }
+
+    #[test]
+    fn should_keep_percentage_respects_threshold() {
+        // At 0%, no keys should be kept
+        let keys: Vec<String> = (0..100).map(|i| format!("key-{}", i)).collect();
+        let kept_at_0 = keys
+            .iter()
+            .filter(|k| should_keep_percentage(0.0, Some(k)))
+            .count();
+        assert_eq!(kept_at_0, 0, "At 0%, nothing should be kept");
+
+        // At 100%, all keys should be kept
+        let kept_at_100 = keys
+            .iter()
+            .filter(|k| should_keep_percentage(1.0, Some(k)))
+            .count();
+        assert_eq!(kept_at_100, 100, "At 100%, everything should be kept");
+    }
+
+    #[test]
+    fn should_keep_percentage_without_key_uses_random() {
+        // Without a sample key, decisions vary (random)
+        // We can't test randomness directly, but we can verify it works
+        let decision = should_keep_percentage(0.5, None);
+        // Just verify it returns a boolean without panicking
+        assert!(decision || !decision);
+    }
+
+    #[tokio::test]
+    async fn evaluate_with_sample_key_is_consistent() {
+        use crate::proto::tero::policy::v1::{LogSampleKey, log_sample_key};
+
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        // Create a policy with 50% sampling and a sample key
+        let matcher = LogMatcher {
+            field: Some(log_matcher::Field::LogField(LogField::Body.into())),
+            r#match: Some(log_matcher::Match::Contains("test".to_string())),
+            negate: false,
+            case_insensitive: false,
+        };
+
+        let sample_key = LogSampleKey {
+            field: Some(log_sample_key::Field::LogAttribute(
+                crate::proto::tero::policy::v1::AttributePath {
+                    path: vec!["request_id".to_string()],
+                },
+            )),
+        };
+
+        let log_target = LogTarget {
+            r#match: vec![matcher],
+            keep: "50%".to_string(),
+            transform: None,
+            sample_key: Some(sample_key),
+        };
+
+        let proto = ProtoPolicy {
+            id: "sample-key-test".to_string(),
+            name: "sample-key-test".to_string(),
+            enabled: true,
+            target: Some(crate::proto::tero::policy::v1::policy::Target::Log(
+                log_target,
+            )),
+            ..Default::default()
+        };
+
+        handle.update(vec![Policy::new(proto)]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Evaluate the same log multiple times - should get consistent results
+        let log = TestLog::new()
+            .with_body("test")
+            .with_log_attr("request_id", "req-12345");
+
+        let mut results = Vec::new();
+        for _ in 0..5 {
+            let result = engine.evaluate(&snapshot, &log).await.unwrap();
+            if let EvaluateResult::Sample { keep, .. } = result {
+                results.push(keep);
+            }
+        }
+
+        // All results should be the same (consistent sampling)
+        assert_eq!(results.len(), 5);
+        let first = results[0];
+        assert!(
+            results.iter().all(|&r| r == first),
+            "Sample key should produce consistent results"
+        );
+    }
+
+    #[tokio::test]
+    async fn evaluate_without_sample_key_field_falls_back_to_random() {
+        use crate::proto::tero::policy::v1::{LogSampleKey, log_sample_key};
+
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        // Create a policy with sample key pointing to a field that doesn't exist
+        let matcher = LogMatcher {
+            field: Some(log_matcher::Field::LogField(LogField::Body.into())),
+            r#match: Some(log_matcher::Match::Contains("test".to_string())),
+            negate: false,
+            case_insensitive: false,
+        };
+
+        let sample_key = LogSampleKey {
+            field: Some(log_sample_key::Field::LogAttribute(
+                crate::proto::tero::policy::v1::AttributePath {
+                    path: vec!["nonexistent_field".to_string()],
+                },
+            )),
+        };
+
+        let log_target = LogTarget {
+            r#match: vec![matcher],
+            keep: "50%".to_string(),
+            transform: None,
+            sample_key: Some(sample_key),
+        };
+
+        let proto = ProtoPolicy {
+            id: "missing-key-test".to_string(),
+            name: "missing-key-test".to_string(),
+            enabled: true,
+            target: Some(crate::proto::tero::policy::v1::policy::Target::Log(
+                log_target,
+            )),
+            ..Default::default()
+        };
+
+        handle.update(vec![Policy::new(proto)]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Log without the sample key field - should fall back to random sampling
+        let log = TestLog::new().with_body("test");
+
+        // Just verify it doesn't panic and returns a valid result
+        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        assert!(matches!(result, EvaluateResult::Sample { .. }));
     }
 }

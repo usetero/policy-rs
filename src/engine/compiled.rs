@@ -8,7 +8,9 @@ use std::sync::Arc;
 use crate::Policy;
 use crate::error::PolicyError;
 use crate::field::LogFieldSelector;
-use crate::proto::tero::policy::v1::{LogField, LogMatcher, log_matcher};
+use crate::proto::tero::policy::v1::{
+    LogField, LogMatcher, LogSampleKey, log_matcher, log_sample_key,
+};
 use crate::registry::PolicyStats;
 
 use super::keep::CompiledKeep;
@@ -37,6 +39,10 @@ pub struct CompiledPolicy {
     pub stats: Arc<PolicyStats>,
     /// Whether this policy is enabled.
     pub enabled: bool,
+    /// Optional sample key for consistent hash-based sampling.
+    /// When set with percentage-based sampling, logs with the same sample key
+    /// value will consistently be either kept or dropped together.
+    pub sample_key: Option<LogFieldSelector>,
 }
 
 /// Existence check that can't be handled by Vectorscan.
@@ -308,6 +314,9 @@ impl PatternGroups {
                 .map(CompiledTransform::from_proto)
                 .filter(|t| !t.is_empty());
 
+            // Extract sample key if present
+            let sample_key = log_target.sample_key.as_ref().and_then(extract_sample_key);
+
             // Add compiled policy
             result.policies.push(CompiledPolicy {
                 id: policy.id().to_string(),
@@ -316,6 +325,7 @@ impl PatternGroups {
                 transform,
                 stats,
                 enabled: policy.enabled(),
+                sample_key,
             });
 
             // Process each matcher
@@ -465,6 +475,26 @@ fn extract_field(matcher: &LogMatcher) -> Result<LogFieldSelector, PolicyError> 
         None => Err(PolicyError::FieldError {
             reason: "matcher has no field specified".to_string(),
         }),
+    }
+}
+
+/// Extract the field selector from a sample key.
+fn extract_sample_key(sample_key: &LogSampleKey) -> Option<LogFieldSelector> {
+    match &sample_key.field {
+        Some(log_sample_key::Field::LogField(f)) => {
+            let field = LogField::try_from(*f).unwrap_or(LogField::Unspecified);
+            Some(LogFieldSelector::Simple(field))
+        }
+        Some(log_sample_key::Field::LogAttribute(path)) => {
+            Some(LogFieldSelector::from_log_attribute(path))
+        }
+        Some(log_sample_key::Field::ResourceAttribute(path)) => {
+            Some(LogFieldSelector::from_resource_attribute(path))
+        }
+        Some(log_sample_key::Field::ScopeAttribute(path)) => {
+            Some(LogFieldSelector::from_scope_attribute(path))
+        }
+        None => None,
     }
 }
 
