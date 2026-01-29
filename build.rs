@@ -9,6 +9,15 @@ fn main() -> Result<()> {
         .build_client(true)
         .type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]")
         .type_attribute(".", "#[serde(rename_all = \"camelCase\")]")
+        // Support flexible AttributePath deserialization:
+        // - Canonical: { "path": ["a", "b"] }
+        // - Shorthand array: ["a", "b"]
+        // - Shorthand string: "user_id"
+        // Use 'from' and 'into' with a wrapper type that implements the flexible deserialization
+        .type_attribute(
+            "tero.policy.v1.AttributePath",
+            "#[serde(from = \"crate::proto::serde_helpers::attribute_path::AttributePathInput\", into = \"crate::proto::serde_helpers::attribute_path::AttributePathInput\")]",
+        )
         // Flatten oneof fields to match proto3 JSON mapping
         .field_attribute(
             "opentelemetry.proto.common.v1.AnyValue.value",

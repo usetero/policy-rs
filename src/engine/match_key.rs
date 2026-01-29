@@ -44,7 +44,10 @@ mod tests {
 
         let key1 = MatchKey::new(LogFieldSelector::Simple(LogField::Body), false);
         let key2 = MatchKey::new(LogFieldSelector::Simple(LogField::Body), true);
-        let key3 = MatchKey::new(LogFieldSelector::LogAttribute("test".to_string()), false);
+        let key3 = MatchKey::new(
+            LogFieldSelector::LogAttribute(vec!["test".to_string()]),
+            false,
+        );
 
         map.insert(key1.clone(), 1);
         map.insert(key2.clone(), 2);

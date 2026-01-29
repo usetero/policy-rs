@@ -76,7 +76,10 @@ mod tests {
                     LogField::SeverityText => self.severity.take().is_some(),
                     _ => false,
                 },
-                LogFieldSelector::LogAttribute(key) => self.attributes.remove(key).is_some(),
+                LogFieldSelector::LogAttribute(path) => path
+                    .first()
+                    .and_then(|key| self.attributes.remove(key))
+                    .is_some(),
                 _ => false,
             }
         }
@@ -102,7 +105,10 @@ mod tests {
                     }
                     _ => false,
                 },
-                LogFieldSelector::LogAttribute(key) => {
+                LogFieldSelector::LogAttribute(path) => {
+                    let Some(key) = path.first() else {
+                        return false;
+                    };
                     if self.attributes.contains_key(key) {
                         self.attributes.insert(key.clone(), replacement.to_string());
                         true
@@ -127,7 +133,9 @@ mod tests {
                     LogField::SeverityText => self.severity.take(),
                     _ => None,
                 },
-                LogFieldSelector::LogAttribute(key) => self.attributes.remove(key),
+                LogFieldSelector::LogAttribute(path) => {
+                    path.first().and_then(|key| self.attributes.remove(key))
+                }
                 _ => None,
             };
 
@@ -159,7 +167,10 @@ mod tests {
                     }
                     _ => false,
                 },
-                LogFieldSelector::LogAttribute(key) => {
+                LogFieldSelector::LogAttribute(path) => {
+                    let Some(key) = path.first() else {
+                        return false;
+                    };
                     if !upsert && self.attributes.contains_key(key) {
                         return false;
                     }
@@ -187,7 +198,7 @@ mod tests {
     #[test]
     fn remove_attribute() {
         let mut log = TestLog::new().with_attr("key", "value");
-        assert!(log.remove_field(&LogFieldSelector::LogAttribute("key".to_string())));
+        assert!(log.remove_field(&LogFieldSelector::LogAttribute(vec!["key".to_string()])));
         assert!(!log.attributes.contains_key("key"));
     }
 
@@ -223,7 +234,7 @@ mod tests {
     fn rename_attribute() {
         let mut log = TestLog::new().with_attr("old_key", "value");
         assert!(log.rename_field(
-            &LogFieldSelector::LogAttribute("old_key".to_string()),
+            &LogFieldSelector::LogAttribute(vec!["old_key".to_string()]),
             "new_key",
             false
         ));
@@ -237,7 +248,7 @@ mod tests {
             .with_attr("source", "source_value")
             .with_attr("target", "target_value");
         assert!(!log.rename_field(
-            &LogFieldSelector::LogAttribute("source".to_string()),
+            &LogFieldSelector::LogAttribute(vec!["source".to_string()]),
             "target",
             false
         ));
@@ -259,7 +270,7 @@ mod tests {
             .with_attr("source", "source_value")
             .with_attr("target", "target_value");
         assert!(log.rename_field(
-            &LogFieldSelector::LogAttribute("source".to_string()),
+            &LogFieldSelector::LogAttribute(vec!["source".to_string()]),
             "target",
             true
         ));
@@ -274,7 +285,7 @@ mod tests {
     fn add_new_field() {
         let mut log = TestLog::new();
         assert!(log.add_field(
-            &LogFieldSelector::LogAttribute("new_key".to_string()),
+            &LogFieldSelector::LogAttribute(vec!["new_key".to_string()]),
             "new_value",
             false
         ));
@@ -288,7 +299,7 @@ mod tests {
     fn add_no_upsert_exists() {
         let mut log = TestLog::new().with_attr("key", "original");
         assert!(!log.add_field(
-            &LogFieldSelector::LogAttribute("key".to_string()),
+            &LogFieldSelector::LogAttribute(vec!["key".to_string()]),
             "new_value",
             false
         ));
@@ -299,7 +310,7 @@ mod tests {
     fn add_upsert_overwrites() {
         let mut log = TestLog::new().with_attr("key", "original");
         assert!(log.add_field(
-            &LogFieldSelector::LogAttribute("key".to_string()),
+            &LogFieldSelector::LogAttribute(vec!["key".to_string()]),
             "new_value",
             true
         ));

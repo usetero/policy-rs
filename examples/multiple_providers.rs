@@ -6,9 +6,15 @@ mod common;
 
 use common::LogRecord;
 use policy_rs::proto::tero::policy::v1::{
-    LogField, LogMatcher, LogTarget, Policy as ProtoPolicy, log_matcher,
+    AttributePath, LogField, LogMatcher, LogTarget, Policy as ProtoPolicy, log_matcher,
 };
 use policy_rs::{EvaluateResult, Policy, PolicyEngine, PolicyRegistry};
+
+fn attr_path(s: &str) -> AttributePath {
+    AttributePath {
+        path: vec![s.to_string()],
+    }
+}
 
 /// Create a policy programmatically.
 fn create_policy(id: &str, field: log_matcher::Field, pattern: &str, keep: &str) -> Policy {
@@ -16,12 +22,14 @@ fn create_policy(id: &str, field: log_matcher::Field, pattern: &str, keep: &str)
         field: Some(field),
         r#match: Some(log_matcher::Match::Regex(pattern.to_string())),
         negate: false,
+        case_insensitive: false,
     };
 
     let log_target = LogTarget {
         r#match: vec![matcher],
         keep: keep.to_string(),
         transform: None,
+        sample_key: None,
     };
 
     let proto = ProtoPolicy {
@@ -63,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let team_handle = registry.register_provider();
     team_handle.update(vec![create_policy(
         "team-keep-auth-errors",
-        log_matcher::Field::ResourceAttribute("service.name".to_string()),
+        log_matcher::Field::ResourceAttribute(attr_path("service.name")),
         "auth-service",
         "all",
     )]);
@@ -134,13 +142,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     team_handle.update(vec![
         create_policy(
             "team-keep-auth-errors",
-            log_matcher::Field::ResourceAttribute("service.name".to_string()),
+            log_matcher::Field::ResourceAttribute(attr_path("service.name")),
             "auth-service",
             "all",
         ),
         create_policy(
             "team-drop-payment-debug",
-            log_matcher::Field::ResourceAttribute("service.name".to_string()),
+            log_matcher::Field::ResourceAttribute(attr_path("service.name")),
             "payment-service",
             "none",
         ),

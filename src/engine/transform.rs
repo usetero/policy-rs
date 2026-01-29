@@ -173,14 +173,14 @@ impl CompiledTransform {
                 let field = LogField::try_from(*f).unwrap_or(LogField::Unspecified);
                 Some(LogFieldSelector::Simple(field))
             }
-            Some(log_remove::Field::LogAttribute(key)) => {
-                Some(LogFieldSelector::LogAttribute(key.clone()))
+            Some(log_remove::Field::LogAttribute(path)) => {
+                Some(LogFieldSelector::from_log_attribute(path))
             }
-            Some(log_remove::Field::ResourceAttribute(key)) => {
-                Some(LogFieldSelector::ResourceAttribute(key.clone()))
+            Some(log_remove::Field::ResourceAttribute(path)) => {
+                Some(LogFieldSelector::from_resource_attribute(path))
             }
-            Some(log_remove::Field::ScopeAttribute(key)) => {
-                Some(LogFieldSelector::ScopeAttribute(key.clone()))
+            Some(log_remove::Field::ScopeAttribute(path)) => {
+                Some(LogFieldSelector::from_scope_attribute(path))
             }
             None => None,
         }
@@ -192,14 +192,14 @@ impl CompiledTransform {
                 let field = LogField::try_from(*f).unwrap_or(LogField::Unspecified);
                 Some(LogFieldSelector::Simple(field))
             }
-            Some(log_redact::Field::LogAttribute(key)) => {
-                Some(LogFieldSelector::LogAttribute(key.clone()))
+            Some(log_redact::Field::LogAttribute(path)) => {
+                Some(LogFieldSelector::from_log_attribute(path))
             }
-            Some(log_redact::Field::ResourceAttribute(key)) => {
-                Some(LogFieldSelector::ResourceAttribute(key.clone()))
+            Some(log_redact::Field::ResourceAttribute(path)) => {
+                Some(LogFieldSelector::from_resource_attribute(path))
             }
-            Some(log_redact::Field::ScopeAttribute(key)) => {
-                Some(LogFieldSelector::ScopeAttribute(key.clone()))
+            Some(log_redact::Field::ScopeAttribute(path)) => {
+                Some(LogFieldSelector::from_scope_attribute(path))
             }
             None => None,
         }
@@ -211,14 +211,14 @@ impl CompiledTransform {
                 let field = LogField::try_from(*f).unwrap_or(LogField::Unspecified);
                 Some(LogFieldSelector::Simple(field))
             }
-            Some(log_rename::From::FromLogAttribute(key)) => {
-                Some(LogFieldSelector::LogAttribute(key.clone()))
+            Some(log_rename::From::FromLogAttribute(path)) => {
+                Some(LogFieldSelector::from_log_attribute(path))
             }
-            Some(log_rename::From::FromResourceAttribute(key)) => {
-                Some(LogFieldSelector::ResourceAttribute(key.clone()))
+            Some(log_rename::From::FromResourceAttribute(path)) => {
+                Some(LogFieldSelector::from_resource_attribute(path))
             }
-            Some(log_rename::From::FromScopeAttribute(key)) => {
-                Some(LogFieldSelector::ScopeAttribute(key.clone()))
+            Some(log_rename::From::FromScopeAttribute(path)) => {
+                Some(LogFieldSelector::from_scope_attribute(path))
             }
             None => None,
         }
@@ -230,14 +230,14 @@ impl CompiledTransform {
                 let field = LogField::try_from(*f).unwrap_or(LogField::Unspecified);
                 Some(LogFieldSelector::Simple(field))
             }
-            Some(log_add::Field::LogAttribute(key)) => {
-                Some(LogFieldSelector::LogAttribute(key.clone()))
+            Some(log_add::Field::LogAttribute(path)) => {
+                Some(LogFieldSelector::from_log_attribute(path))
             }
-            Some(log_add::Field::ResourceAttribute(key)) => {
-                Some(LogFieldSelector::ResourceAttribute(key.clone()))
+            Some(log_add::Field::ResourceAttribute(path)) => {
+                Some(LogFieldSelector::from_resource_attribute(path))
             }
-            Some(log_add::Field::ScopeAttribute(key)) => {
-                Some(LogFieldSelector::ScopeAttribute(key.clone()))
+            Some(log_add::Field::ScopeAttribute(path)) => {
+                Some(LogFieldSelector::from_scope_attribute(path))
             }
             None => None,
         }
@@ -278,7 +278,12 @@ mod tests {
         fn remove_field(&mut self, field: &LogFieldSelector) -> bool {
             match field {
                 LogFieldSelector::Simple(LogField::Body) => self.body.take().is_some(),
-                LogFieldSelector::LogAttribute(key) => self.attributes.remove(key).is_some(),
+                LogFieldSelector::LogAttribute(path) => {
+                    // For tests, use first path segment as flat key
+                    path.first()
+                        .and_then(|key| self.attributes.remove(key))
+                        .is_some()
+                }
                 _ => false,
             }
         }
@@ -293,7 +298,10 @@ mod tests {
                         false
                     }
                 }
-                LogFieldSelector::LogAttribute(key) => {
+                LogFieldSelector::LogAttribute(path) => {
+                    let Some(key) = path.first() else {
+                        return false;
+                    };
                     if self.attributes.contains_key(key) {
                         self.attributes.insert(key.clone(), replacement.to_string());
                         true
@@ -311,7 +319,9 @@ mod tests {
             }
             let value = match from {
                 LogFieldSelector::Simple(LogField::Body) => self.body.take(),
-                LogFieldSelector::LogAttribute(key) => self.attributes.remove(key),
+                LogFieldSelector::LogAttribute(path) => {
+                    path.first().and_then(|key| self.attributes.remove(key))
+                }
                 _ => None,
             };
             if let Some(v) = value {
@@ -331,7 +341,10 @@ mod tests {
                     self.body = Some(value.to_string());
                     true
                 }
-                LogFieldSelector::LogAttribute(key) => {
+                LogFieldSelector::LogAttribute(path) => {
+                    let Some(key) = path.first() else {
+                        return false;
+                    };
                     if !upsert && self.attributes.contains_key(key) {
                         return false;
                     }
@@ -366,9 +379,12 @@ mod tests {
 
     #[test]
     fn from_proto_with_redact() {
+        use crate::proto::tero::policy::v1::AttributePath;
         let proto = LogTransform {
             redact: vec![LogRedact {
-                field: Some(log_redact::Field::LogAttribute("secret".to_string())),
+                field: Some(log_redact::Field::LogAttribute(AttributePath {
+                    path: vec!["secret".to_string()],
+                })),
                 replacement: "[REDACTED]".to_string(),
             }],
             ..Default::default()
@@ -377,16 +393,19 @@ mod tests {
         assert_eq!(compiled.ops.len(), 1);
         assert!(
             matches!(&compiled.ops[0], TransformOp::Redact { field, replacement }
-            if matches!(field, LogFieldSelector::LogAttribute(k) if k == "secret")
+            if matches!(field, LogFieldSelector::LogAttribute(p) if p == &vec!["secret".to_string()])
             && replacement == "[REDACTED]")
         );
     }
 
     #[test]
     fn from_proto_with_rename() {
+        use crate::proto::tero::policy::v1::AttributePath;
         let proto = LogTransform {
             rename: vec![LogRename {
-                from: Some(log_rename::From::FromLogAttribute("old".to_string())),
+                from: Some(log_rename::From::FromLogAttribute(AttributePath {
+                    path: vec!["old".to_string()],
+                })),
                 to: "new".to_string(),
                 upsert: true,
             }],
@@ -396,16 +415,19 @@ mod tests {
         assert_eq!(compiled.ops.len(), 1);
         assert!(
             matches!(&compiled.ops[0], TransformOp::Rename { from, to, upsert }
-            if matches!(from, LogFieldSelector::LogAttribute(k) if k == "old")
+            if matches!(from, LogFieldSelector::LogAttribute(p) if p == &vec!["old".to_string()])
             && to == "new" && *upsert)
         );
     }
 
     #[test]
     fn from_proto_with_add() {
+        use crate::proto::tero::policy::v1::AttributePath;
         let proto = LogTransform {
             add: vec![LogAdd {
-                field: Some(log_add::Field::LogAttribute("tag".to_string())),
+                field: Some(log_add::Field::LogAttribute(AttributePath {
+                    path: vec!["tag".to_string()],
+                })),
                 value: "production".to_string(),
                 upsert: false,
             }],
@@ -415,30 +437,39 @@ mod tests {
         assert_eq!(compiled.ops.len(), 1);
         assert!(
             matches!(&compiled.ops[0], TransformOp::Add { field, value, upsert }
-            if matches!(field, LogFieldSelector::LogAttribute(k) if k == "tag")
+            if matches!(field, LogFieldSelector::LogAttribute(p) if p == &vec!["tag".to_string()])
             && value == "production" && !*upsert)
         );
     }
 
     #[test]
     fn from_proto_ordering() {
+        use crate::proto::tero::policy::v1::AttributePath;
         // Verify order: remove, redact, rename, add
         let proto = LogTransform {
             add: vec![LogAdd {
-                field: Some(log_add::Field::LogAttribute("add".to_string())),
+                field: Some(log_add::Field::LogAttribute(AttributePath {
+                    path: vec!["add".to_string()],
+                })),
                 value: "v".to_string(),
                 upsert: false,
             }],
             remove: vec![LogRemove {
-                field: Some(log_remove::Field::LogAttribute("remove".to_string())),
+                field: Some(log_remove::Field::LogAttribute(AttributePath {
+                    path: vec!["remove".to_string()],
+                })),
             }],
             rename: vec![LogRename {
-                from: Some(log_rename::From::FromLogAttribute("rename".to_string())),
+                from: Some(log_rename::From::FromLogAttribute(AttributePath {
+                    path: vec!["rename".to_string()],
+                })),
                 to: "renamed".to_string(),
                 upsert: false,
             }],
             redact: vec![LogRedact {
-                field: Some(log_redact::Field::LogAttribute("redact".to_string())),
+                field: Some(log_redact::Field::LogAttribute(AttributePath {
+                    path: vec!["redact".to_string()],
+                })),
                 replacement: "X".to_string(),
             }],
         };
@@ -462,16 +493,16 @@ mod tests {
         let transform = CompiledTransform {
             ops: vec![
                 TransformOp::Redact {
-                    field: LogFieldSelector::LogAttribute("secret".to_string()),
+                    field: LogFieldSelector::LogAttribute(vec!["secret".to_string()]),
                     replacement: "[REDACTED]".to_string(),
                 },
                 TransformOp::Rename {
-                    from: LogFieldSelector::LogAttribute("old_name".to_string()),
+                    from: LogFieldSelector::LogAttribute(vec!["old_name".to_string()]),
                     to: "new_name".to_string(),
                     upsert: false,
                 },
                 TransformOp::Add {
-                    field: LogFieldSelector::LogAttribute("env".to_string()),
+                    field: LogFieldSelector::LogAttribute(vec!["env".to_string()]),
                     value: "prod".to_string(),
                     upsert: false,
                 },
@@ -501,7 +532,7 @@ mod tests {
                 },
                 // This will fail (field doesn't exist)
                 TransformOp::Redact {
-                    field: LogFieldSelector::LogAttribute("nonexistent".to_string()),
+                    field: LogFieldSelector::LogAttribute(vec!["nonexistent".to_string()]),
                     replacement: "X".to_string(),
                 },
             ],

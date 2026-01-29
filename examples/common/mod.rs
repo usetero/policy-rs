@@ -46,12 +46,13 @@ impl Matchable for LogRecord {
                 LogField::SeverityText => self.severity.as_deref().map(Cow::Borrowed),
                 _ => None,
             },
-            LogFieldSelector::LogAttribute(key) => {
-                self.attributes.get(key).map(|s| Cow::Borrowed(s.as_str()))
-            }
-            LogFieldSelector::ResourceAttribute(key) => self
-                .resource_attributes
-                .get(key)
+            LogFieldSelector::LogAttribute(path) => path
+                .first()
+                .and_then(|key| self.attributes.get(key))
+                .map(|s| Cow::Borrowed(s.as_str())),
+            LogFieldSelector::ResourceAttribute(path) => path
+                .first()
+                .and_then(|key| self.resource_attributes.get(key))
                 .map(|s| Cow::Borrowed(s.as_str())),
             LogFieldSelector::ScopeAttribute(_) => None,
         }
@@ -66,10 +67,14 @@ impl Transformable for LogRecord {
                 LogField::SeverityText => self.severity.take().is_some(),
                 _ => false,
             },
-            LogFieldSelector::LogAttribute(key) => self.attributes.remove(key).is_some(),
-            LogFieldSelector::ResourceAttribute(key) => {
-                self.resource_attributes.remove(key).is_some()
-            }
+            LogFieldSelector::LogAttribute(path) => path
+                .first()
+                .and_then(|key| self.attributes.remove(key))
+                .is_some(),
+            LogFieldSelector::ResourceAttribute(path) => path
+                .first()
+                .and_then(|key| self.resource_attributes.remove(key))
+                .is_some(),
             LogFieldSelector::ScopeAttribute(_) => false,
         }
     }
@@ -95,22 +100,24 @@ impl Transformable for LogRecord {
                 }
                 _ => false,
             },
-            LogFieldSelector::LogAttribute(key) => {
-                if self.attributes.contains_key(key) {
-                    self.attributes.insert(key.clone(), replacement.to_string());
-                    true
-                } else {
-                    false
+            LogFieldSelector::LogAttribute(path) => {
+                if let Some(key) = path.first() {
+                    if self.attributes.contains_key(key) {
+                        self.attributes.insert(key.clone(), replacement.to_string());
+                        return true;
+                    }
                 }
+                false
             }
-            LogFieldSelector::ResourceAttribute(key) => {
-                if self.resource_attributes.contains_key(key) {
-                    self.resource_attributes
-                        .insert(key.clone(), replacement.to_string());
-                    true
-                } else {
-                    false
+            LogFieldSelector::ResourceAttribute(path) => {
+                if let Some(key) = path.first() {
+                    if self.resource_attributes.contains_key(key) {
+                        self.resource_attributes
+                            .insert(key.clone(), replacement.to_string());
+                        return true;
+                    }
                 }
+                false
             }
             LogFieldSelector::ScopeAttribute(_) => false,
         }
@@ -126,8 +133,12 @@ impl Transformable for LogRecord {
                 LogField::SeverityText => self.severity.take(),
                 _ => None,
             },
-            LogFieldSelector::LogAttribute(key) => self.attributes.remove(key),
-            LogFieldSelector::ResourceAttribute(key) => self.resource_attributes.remove(key),
+            LogFieldSelector::LogAttribute(path) => {
+                path.first().and_then(|key| self.attributes.remove(key))
+            }
+            LogFieldSelector::ResourceAttribute(path) => path
+                .first()
+                .and_then(|key| self.resource_attributes.remove(key)),
             LogFieldSelector::ScopeAttribute(_) => None,
         };
         if let Some(v) = value {
@@ -157,20 +168,26 @@ impl Transformable for LogRecord {
                 }
                 _ => false,
             },
-            LogFieldSelector::LogAttribute(key) => {
-                if !upsert && self.attributes.contains_key(key) {
-                    return false;
+            LogFieldSelector::LogAttribute(path) => {
+                if let Some(key) = path.first() {
+                    if !upsert && self.attributes.contains_key(key) {
+                        return false;
+                    }
+                    self.attributes.insert(key.clone(), value.to_string());
+                    return true;
                 }
-                self.attributes.insert(key.clone(), value.to_string());
-                true
+                false
             }
-            LogFieldSelector::ResourceAttribute(key) => {
-                if !upsert && self.resource_attributes.contains_key(key) {
-                    return false;
+            LogFieldSelector::ResourceAttribute(path) => {
+                if let Some(key) = path.first() {
+                    if !upsert && self.resource_attributes.contains_key(key) {
+                        return false;
+                    }
+                    self.resource_attributes
+                        .insert(key.clone(), value.to_string());
+                    return true;
                 }
-                self.resource_attributes
-                    .insert(key.clone(), value.to_string());
-                true
+                false
             }
             LogFieldSelector::ScopeAttribute(_) => false,
         }

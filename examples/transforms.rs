@@ -12,10 +12,16 @@ mod common;
 
 use common::{LogRecord, print_log};
 use policy_rs::proto::tero::policy::v1::{
-    LogAdd, LogField, LogMatcher, LogRedact, LogRemove, LogRename, LogTarget, LogTransform,
-    Policy as ProtoPolicy, log_add, log_matcher, log_redact, log_remove, log_rename,
+    AttributePath, LogAdd, LogField, LogMatcher, LogRedact, LogRemove, LogRename, LogTarget,
+    LogTransform, Policy as ProtoPolicy, log_add, log_matcher, log_redact, log_remove, log_rename,
 };
 use policy_rs::{Policy, PolicyEngine, PolicyRegistry};
+
+fn attr_path(s: &str) -> AttributePath {
+    AttributePath {
+        path: vec![s.to_string()],
+    }
+}
 
 /// Create a policy with matchers and transforms.
 fn create_policy(
@@ -28,6 +34,7 @@ fn create_policy(
         r#match: matchers,
         keep: keep.to_string(),
         transform,
+        sample_key: None,
     };
 
     let proto = ProtoPolicy {
@@ -48,6 +55,7 @@ fn body_regex_matcher(pattern: &str) -> LogMatcher {
         field: Some(log_matcher::Field::LogField(LogField::Body.into())),
         r#match: Some(log_matcher::Match::Regex(pattern.to_string())),
         negate: false,
+        case_insensitive: false,
     }
 }
 
@@ -62,16 +70,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let auth_transform = LogTransform {
         redact: vec![
             LogRedact {
-                field: Some(log_redact::Field::LogAttribute("password".to_string())),
+                field: Some(log_redact::Field::LogAttribute(attr_path("password"))),
                 replacement: "[REDACTED]".to_string(),
             },
             LogRedact {
-                field: Some(log_redact::Field::LogAttribute("api_key".to_string())),
+                field: Some(log_redact::Field::LogAttribute(attr_path("api_key"))),
                 replacement: "[REDACTED]".to_string(),
             },
         ],
         add: vec![LogAdd {
-            field: Some(log_add::Field::LogAttribute("sanitized".to_string())),
+            field: Some(log_add::Field::LogAttribute(attr_path("sanitized"))),
             value: "true".to_string(),
             upsert: false,
         }],
@@ -89,14 +97,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cleanup_transform = LogTransform {
         remove: vec![
             LogRemove {
-                field: Some(log_remove::Field::LogAttribute("debug_trace".to_string())),
+                field: Some(log_remove::Field::LogAttribute(attr_path("debug_trace"))),
             },
             LogRemove {
-                field: Some(log_remove::Field::LogAttribute("internal_id".to_string())),
+                field: Some(log_remove::Field::LogAttribute(attr_path("internal_id"))),
             },
         ],
         add: vec![LogAdd {
-            field: Some(log_add::Field::LogAttribute("processed_by".to_string())),
+            field: Some(log_add::Field::LogAttribute(attr_path("processed_by"))),
             value: "policy-engine-v1".to_string(),
             upsert: false,
         }],
@@ -114,12 +122,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rename_transform = LogTransform {
         rename: vec![
             LogRename {
-                from: Some(log_rename::From::FromLogAttribute("usr".to_string())),
+                from: Some(log_rename::From::FromLogAttribute(attr_path("usr"))),
                 to: "user_id".to_string(),
                 upsert: true,
             },
             LogRename {
-                from: Some(log_rename::From::FromLogAttribute("ts".to_string())),
+                from: Some(log_rename::From::FromLogAttribute(attr_path("ts"))),
                 to: "timestamp".to_string(),
                 upsert: true,
             },
