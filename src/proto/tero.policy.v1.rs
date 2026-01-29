@@ -37,6 +37,10 @@
 /// cleaner output.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(
+    from = "crate::proto::serde_helpers::attribute_path::AttributePathInput",
+    into = "crate::proto::serde_helpers::attribute_path::AttributePathInput"
+)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AttributePath {
     /// Path segments for attribute traversal.

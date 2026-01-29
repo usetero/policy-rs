@@ -7,7 +7,8 @@ use crate::field::LogFieldSelector;
 /// Trait for types that can be matched against policies.
 ///
 /// Implementors provide field access for log records by implementing
-/// the single `get_field` method.
+/// the single `get_field` method. This enables the policy engine to
+/// extract field values for pattern matching.
 ///
 /// # Path-based Attribute Access
 ///
@@ -15,17 +16,42 @@ use crate::field::LogFieldSelector;
 /// the path is a `Vec<String>` representing nested attribute access:
 ///
 /// - Single segment `["user_id"]` - access a flat attribute
-/// - Multiple segments `["http", "method"]` - traverse nested maps
+/// - Multiple segments `["http", "method"]` - traverse nested maps/objects
+/// - Three+ segments `["request", "headers", "content_type"]` - deep nesting
 ///
-/// Implementors should handle path traversal according to their data structure.
-/// For flat attribute maps, typically only single-segment paths are supported,
-/// and the first segment is used as the key.
+/// # Implementation Guidelines
+///
+/// 1. **Simple Fields**: Return the field value directly for `LogFieldSelector::Simple`
+/// 2. **Flat Attributes**: For single-segment paths, use the first element as the key
+/// 3. **Nested Attributes**: For multi-segment paths, traverse the nested structure
+/// 4. **Missing Fields**: Return `None` if the field or any intermediate path doesn't exist
+/// 5. **Non-String Values**: Convert values to strings or return `None`
+///
+/// # Example Implementation
+///
+/// ```ignore
+/// impl Matchable for MyLog {
+///     fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
+///         match field {
+///             LogFieldSelector::Simple(f) => match f {
+///                 LogField::Body => self.body.as_deref().map(Cow::Borrowed),
+///                 _ => None,
+///             },
+///             LogFieldSelector::LogAttribute(path) => {
+///                 // Traverse nested attributes using the path
+///                 self.traverse_attributes(&self.log_attributes, path)
+///             }
+///             _ => None,
+///         }
+///     }
+/// }
+/// ```
 pub trait Matchable {
     /// Get a field value by selector.
     ///
     /// Returns `None` for fields that don't exist or aren't applicable.
     /// Returns `Cow::Borrowed` for fields that exist as stored strings,
-    /// or `Cow::Owned` for computed/parsed fields.
+    /// or `Cow::Owned` for computed/converted fields.
     ///
     /// For attribute selectors with multi-segment paths, traverse the nested
     /// structure and return the leaf value as a string.

@@ -1,4 +1,40 @@
 //! Policy library for working with protobuf-defined policy objects.
+//!
+//! This library provides a high-performance policy evaluation engine for log telemetry
+//! using Vectorscan (Hyperscan) for pattern matching.
+//!
+//! # Features
+//!
+//! - **Pattern Matching**: Supports regex, exact, starts_with, ends_with, and contains matchers
+//! - **Case-Insensitive Matching**: Optional case-insensitive flag for any matcher type
+//! - **Nested Attribute Access**: Access nested attributes via path (e.g., `["http", "method"]`)
+//! - **Sampling**: Percentage-based sampling with optional sample key for consistent decisions
+//! - **Rate Limiting**: Per-second and per-minute rate limiting
+//! - **Transforms**: Remove, redact, rename, and add fields to matching logs
+//!
+//! # Example
+//!
+//! ```ignore
+//! use policy_rs::{PolicyEngine, PolicyRegistry, Matchable, EvaluateResult};
+//!
+//! // Create a registry and register policies
+//! let registry = PolicyRegistry::new();
+//! let handle = registry.register_provider();
+//! handle.update(policies);
+//!
+//! // Create an engine and evaluate logs
+//! let engine = PolicyEngine::new();
+//! let snapshot = registry.snapshot();
+//! let result = engine.evaluate(&snapshot, &log).await?;
+//!
+//! match result {
+//!     EvaluateResult::Keep { policy_id, .. } => println!("Keep: {}", policy_id),
+//!     EvaluateResult::Drop { policy_id } => println!("Drop: {}", policy_id),
+//!     EvaluateResult::Sample { keep, .. } => println!("Sample: keep={}", keep),
+//!     EvaluateResult::NoMatch => println!("No matching policy"),
+//!     _ => {}
+//! }
+//! ```
 
 pub mod config;
 pub mod engine;

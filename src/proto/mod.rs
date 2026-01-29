@@ -90,6 +90,46 @@ pub mod serde_helpers {
             }
         }
     }
+
+    /// Module for AttributePath deserialization supporting three forms:
+    /// 1. Canonical: `{ "path": ["http", "method"] }`
+    /// 2. Shorthand array: `["http", "method"]`
+    /// 3. Shorthand string: `"user_id"`
+    pub mod attribute_path {
+        use super::super::tero::policy::v1::AttributePath;
+        use serde::{self, Deserialize, Serialize};
+
+        /// Wrapper type for flexible AttributePath serialization/deserialization.
+        /// Used with `#[serde(from = "...", into = "...")]` on AttributePath.
+        #[derive(Serialize, Deserialize, Clone)]
+        #[serde(untagged)]
+        pub enum AttributePathInput {
+            /// Canonical: { "path": ["a", "b"] }
+            Canonical { path: Vec<String> },
+            /// Shorthand array: ["a", "b"]
+            Array(Vec<String>),
+            /// Shorthand string: "user_id"
+            String(String),
+        }
+
+        impl From<AttributePathInput> for AttributePath {
+            fn from(input: AttributePathInput) -> Self {
+                let path = match input {
+                    AttributePathInput::Canonical { path } => path,
+                    AttributePathInput::Array(arr) => arr,
+                    AttributePathInput::String(s) => vec![s],
+                };
+                AttributePath { path }
+            }
+        }
+
+        impl From<AttributePath> for AttributePathInput {
+            fn from(attr: AttributePath) -> Self {
+                // Serialize as shorthand array (cleaner output)
+                AttributePathInput::Array(attr.path)
+            }
+        }
+    }
 }
 
 pub mod google {
