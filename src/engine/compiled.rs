@@ -345,6 +345,36 @@ impl PatternGroups {
                             is_negated,
                         });
                     }
+                    Some(log_matcher::Match::StartsWith(s)) => {
+                        // Convert starts_with to anchored prefix regex
+                        let pattern = format!("^{}", regex_escape(s));
+                        let key = MatchKey::new(field, is_negated);
+
+                        result.groups.entry(key).or_default().push(PatternInfo {
+                            pattern,
+                            policy_index,
+                        });
+                    }
+                    Some(log_matcher::Match::EndsWith(s)) => {
+                        // Convert ends_with to anchored suffix regex
+                        let pattern = format!("{}$", regex_escape(s));
+                        let key = MatchKey::new(field, is_negated);
+
+                        result.groups.entry(key).or_default().push(PatternInfo {
+                            pattern,
+                            policy_index,
+                        });
+                    }
+                    Some(log_matcher::Match::Contains(s)) => {
+                        // Contains is just an unanchored literal search
+                        let pattern = regex_escape(s);
+                        let key = MatchKey::new(field, is_negated);
+
+                        result.groups.entry(key).or_default().push(PatternInfo {
+                            pattern,
+                            policy_index,
+                        });
+                    }
                     None => {
                         // No match type specified, skip
                     }
@@ -402,14 +432,14 @@ fn extract_field(matcher: &LogMatcher) -> Result<LogFieldSelector, PolicyError> 
             let field = LogField::try_from(*f).unwrap_or(LogField::Unspecified);
             Ok(LogFieldSelector::Simple(field))
         }
-        Some(log_matcher::Field::LogAttribute(key)) => {
-            Ok(LogFieldSelector::LogAttribute(key.clone()))
+        Some(log_matcher::Field::LogAttribute(path)) => {
+            Ok(LogFieldSelector::from_log_attribute(path))
         }
-        Some(log_matcher::Field::ResourceAttribute(key)) => {
-            Ok(LogFieldSelector::ResourceAttribute(key.clone()))
+        Some(log_matcher::Field::ResourceAttribute(path)) => {
+            Ok(LogFieldSelector::from_resource_attribute(path))
         }
-        Some(log_matcher::Field::ScopeAttribute(key)) => {
-            Ok(LogFieldSelector::ScopeAttribute(key.clone()))
+        Some(log_matcher::Field::ScopeAttribute(path)) => {
+            Ok(LogFieldSelector::from_scope_attribute(path))
         }
         None => Err(PolicyError::FieldError {
             reason: "matcher has no field specified".to_string(),
@@ -450,12 +480,14 @@ mod tests {
             field: Some(field),
             r#match: Some(match_type),
             negate,
+            case_insensitive: false,
         };
 
         let log_target = LogTarget {
             r#match: vec![matcher],
             keep: keep.to_string(),
             transform: None,
+            sample_key: None,
         };
 
         let proto = ProtoPolicy {
@@ -469,6 +501,12 @@ mod tests {
         };
 
         Policy::new(proto)
+    }
+
+    fn attr_path(key: &str) -> crate::proto::tero::policy::v1::AttributePath {
+        crate::proto::tero::policy::v1::AttributePath {
+            path: vec![key.to_string()],
+        }
     }
 
     #[test]
@@ -534,7 +572,7 @@ mod tests {
     fn build_pattern_groups_existence() {
         let policy = make_policy_with_matcher(
             "test",
-            log_matcher::Field::LogAttribute("trace_id".to_string()),
+            log_matcher::Field::LogAttribute(attr_path("trace_id")),
             log_matcher::Match::Exists(true),
             false,
             "all",
@@ -602,15 +640,16 @@ mod tests {
             field: Some(log_matcher::Field::LogField(LogField::Body.into())),
             r#match: Some(log_matcher::Match::Regex("error".to_string())),
             negate: false,
+            case_insensitive: false,
         };
 
         let transform = LogTransform {
             redact: vec![LogRedact {
-                field: Some(log_redact::Field::LogAttribute("password".to_string())),
+                field: Some(log_redact::Field::LogAttribute(attr_path("password"))),
                 replacement: "[REDACTED]".to_string(),
             }],
             add: vec![LogAdd {
-                field: Some(log_add::Field::LogAttribute("processed".to_string())),
+                field: Some(log_add::Field::LogAttribute(attr_path("processed"))),
                 value: "true".to_string(),
                 upsert: false,
             }],
@@ -621,6 +660,7 @@ mod tests {
             r#match: vec![matcher],
             keep: "all".to_string(),
             transform: Some(transform),
+            sample_key: None,
         };
 
         let proto = ProtoPolicy {
@@ -647,6 +687,7 @@ mod tests {
             field: Some(log_matcher::Field::LogField(LogField::Body.into())),
             r#match: Some(log_matcher::Match::Regex("error".to_string())),
             negate: false,
+            case_insensitive: false,
         };
 
         // Empty transform (no operations)
@@ -656,6 +697,7 @@ mod tests {
             r#match: vec![matcher],
             keep: "all".to_string(),
             transform: Some(transform),
+            sample_key: None,
         };
 
         let proto = ProtoPolicy {

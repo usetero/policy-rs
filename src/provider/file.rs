@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use crate::error::PolicyError;
 use crate::field::LogFieldSelector;
 use crate::policy::Policy;
-use crate::proto::tero::policy::v1::{LogMatcher, LogTarget, Policy as ProtoPolicy, log_matcher};
+use crate::proto::tero::policy::v1::{
+    AttributePath, LogMatcher, LogTarget, Policy as ProtoPolicy, log_matcher,
+};
 
 use super::{PolicyCallback, PolicyProvider};
 
@@ -111,6 +113,7 @@ fn convert_json_policy(json: JsonPolicy) -> Result<Policy, PolicyError> {
         r#match: matchers?,
         keep: json.keep,
         transform: None,
+        sample_key: None,
     };
 
     let proto = ProtoPolicy {
@@ -140,9 +143,15 @@ fn convert_json_matcher(policy_id: &str, json: JsonMatcher) -> Result<LogMatcher
 
     let field = match field_selector {
         LogFieldSelector::Simple(f) => log_matcher::Field::LogField(f.into()),
-        LogFieldSelector::LogAttribute(k) => log_matcher::Field::LogAttribute(k),
-        LogFieldSelector::ResourceAttribute(k) => log_matcher::Field::ResourceAttribute(k),
-        LogFieldSelector::ScopeAttribute(k) => log_matcher::Field::ScopeAttribute(k),
+        LogFieldSelector::LogAttribute(path) => {
+            log_matcher::Field::LogAttribute(AttributePath { path })
+        }
+        LogFieldSelector::ResourceAttribute(path) => {
+            log_matcher::Field::ResourceAttribute(AttributePath { path })
+        }
+        LogFieldSelector::ScopeAttribute(path) => {
+            log_matcher::Field::ScopeAttribute(AttributePath { path })
+        }
     };
 
     // Determine match type - use regex for patterns
@@ -152,6 +161,7 @@ fn convert_json_matcher(policy_id: &str, json: JsonMatcher) -> Result<LogMatcher
         field: Some(field),
         r#match: Some(match_type),
         negate: json.negate,
+        case_insensitive: false,
     })
 }
 

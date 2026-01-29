@@ -453,13 +453,13 @@ mod tests {
                     LogField::SeverityText => self.severity_text.as_deref().map(Cow::Borrowed),
                     _ => None,
                 },
-                LogFieldSelector::LogAttribute(key) => self
-                    .log_attributes
-                    .get(key)
+                LogFieldSelector::LogAttribute(path) => path
+                    .first()
+                    .and_then(|key| self.log_attributes.get(key))
                     .map(|s| Cow::Borrowed(s.as_str())),
-                LogFieldSelector::ResourceAttribute(key) => self
-                    .resource_attributes
-                    .get(key)
+                LogFieldSelector::ResourceAttribute(path) => path
+                    .first()
+                    .and_then(|key| self.resource_attributes.get(key))
                     .map(|s| Cow::Borrowed(s.as_str())),
                 LogFieldSelector::ScopeAttribute(_) => None,
             }
@@ -474,10 +474,14 @@ mod tests {
                     LogField::SeverityText => self.severity_text.take().is_some(),
                     _ => false,
                 },
-                LogFieldSelector::LogAttribute(key) => self.log_attributes.remove(key).is_some(),
-                LogFieldSelector::ResourceAttribute(key) => {
-                    self.resource_attributes.remove(key).is_some()
-                }
+                LogFieldSelector::LogAttribute(path) => path
+                    .first()
+                    .and_then(|key| self.log_attributes.remove(key))
+                    .is_some(),
+                LogFieldSelector::ResourceAttribute(path) => path
+                    .first()
+                    .and_then(|key| self.resource_attributes.remove(key))
+                    .is_some(),
                 LogFieldSelector::ScopeAttribute(_) => false,
             }
         }
@@ -503,7 +507,10 @@ mod tests {
                     }
                     _ => false,
                 },
-                LogFieldSelector::LogAttribute(key) => {
+                LogFieldSelector::LogAttribute(path) => {
+                    let Some(key) = path.first() else {
+                        return false;
+                    };
                     if self.log_attributes.contains_key(key) {
                         self.log_attributes
                             .insert(key.clone(), replacement.to_string());
@@ -512,7 +519,10 @@ mod tests {
                         false
                     }
                 }
-                LogFieldSelector::ResourceAttribute(key) => {
+                LogFieldSelector::ResourceAttribute(path) => {
+                    let Some(key) = path.first() else {
+                        return false;
+                    };
                     if self.resource_attributes.contains_key(key) {
                         self.resource_attributes
                             .insert(key.clone(), replacement.to_string());
@@ -535,8 +545,12 @@ mod tests {
                     LogField::SeverityText => self.severity_text.take(),
                     _ => None,
                 },
-                LogFieldSelector::LogAttribute(key) => self.log_attributes.remove(key),
-                LogFieldSelector::ResourceAttribute(key) => self.resource_attributes.remove(key),
+                LogFieldSelector::LogAttribute(path) => {
+                    path.first().and_then(|key| self.log_attributes.remove(key))
+                }
+                LogFieldSelector::ResourceAttribute(path) => path
+                    .first()
+                    .and_then(|key| self.resource_attributes.remove(key)),
                 LogFieldSelector::ScopeAttribute(_) => None,
             };
             if let Some(v) = value {
@@ -566,14 +580,20 @@ mod tests {
                     }
                     _ => false,
                 },
-                LogFieldSelector::LogAttribute(key) => {
+                LogFieldSelector::LogAttribute(path) => {
+                    let Some(key) = path.first() else {
+                        return false;
+                    };
                     if !upsert && self.log_attributes.contains_key(key) {
                         return false;
                     }
                     self.log_attributes.insert(key.clone(), value.to_string());
                     true
                 }
-                LogFieldSelector::ResourceAttribute(key) => {
+                LogFieldSelector::ResourceAttribute(path) => {
+                    let Some(key) = path.first() else {
+                        return false;
+                    };
                     if !upsert && self.resource_attributes.contains_key(key) {
                         return false;
                     }
@@ -601,6 +621,7 @@ mod tests {
             r#match: matchers,
             keep: keep.to_string(),
             transform,
+            sample_key: None,
         };
 
         let proto = ProtoPolicy {
@@ -616,11 +637,18 @@ mod tests {
         Policy::new(proto)
     }
 
+    fn attr_path(key: &str) -> crate::proto::tero::policy::v1::AttributePath {
+        crate::proto::tero::policy::v1::AttributePath {
+            path: vec![key.to_string()],
+        }
+    }
+
     fn body_regex_matcher(pattern: &str, negate: bool) -> LogMatcher {
         LogMatcher {
             field: Some(log_matcher::Field::LogField(LogField::Body.into())),
             r#match: Some(log_matcher::Match::Regex(pattern.to_string())),
             negate,
+            case_insensitive: false,
         }
     }
 
@@ -629,6 +657,7 @@ mod tests {
             field: Some(log_matcher::Field::LogField(LogField::Body.into())),
             r#match: Some(log_matcher::Match::Exact(value.to_string())),
             negate,
+            case_insensitive: false,
         }
     }
 
@@ -637,22 +666,25 @@ mod tests {
             field: Some(log_matcher::Field::LogField(LogField::SeverityText.into())),
             r#match: Some(log_matcher::Match::Exact(value.to_string())),
             negate,
+            case_insensitive: false,
         }
     }
 
     fn log_attr_exists_matcher(key: &str, should_exist: bool, negate: bool) -> LogMatcher {
         LogMatcher {
-            field: Some(log_matcher::Field::LogAttribute(key.to_string())),
+            field: Some(log_matcher::Field::LogAttribute(attr_path(key))),
             r#match: Some(log_matcher::Match::Exists(should_exist)),
             negate,
+            case_insensitive: false,
         }
     }
 
     fn log_attr_regex_matcher(key: &str, pattern: &str, negate: bool) -> LogMatcher {
         LogMatcher {
-            field: Some(log_matcher::Field::LogAttribute(key.to_string())),
+            field: Some(log_matcher::Field::LogAttribute(attr_path(key))),
             r#match: Some(log_matcher::Match::Regex(pattern.to_string())),
             negate,
+            case_insensitive: false,
         }
     }
 
@@ -1248,9 +1280,10 @@ mod tests {
 
     fn resource_attr_regex_matcher(key: &str, pattern: &str, negate: bool) -> LogMatcher {
         LogMatcher {
-            field: Some(log_matcher::Field::ResourceAttribute(key.to_string())),
+            field: Some(log_matcher::Field::ResourceAttribute(attr_path(key))),
             r#match: Some(log_matcher::Match::Regex(pattern.to_string())),
             negate,
+            case_insensitive: false,
         }
     }
 
@@ -1341,7 +1374,7 @@ mod tests {
 
         let transform = LogTransform {
             redact: vec![LogRedact {
-                field: Some(log_redact::Field::LogAttribute("password".to_string())),
+                field: Some(log_redact::Field::LogAttribute(attr_path("password"))),
                 replacement: "[REDACTED]".to_string(),
             }],
             ..Default::default()
@@ -1387,7 +1420,7 @@ mod tests {
 
         let transform = LogTransform {
             remove: vec![LogRemove {
-                field: Some(log_remove::Field::LogAttribute("debug_info".to_string())),
+                field: Some(log_remove::Field::LogAttribute(attr_path("debug_info"))),
             }],
             ..Default::default()
         };
@@ -1434,7 +1467,7 @@ mod tests {
 
         let transform = LogTransform {
             add: vec![LogAdd {
-                field: Some(log_add::Field::LogAttribute("processed_by".to_string())),
+                field: Some(log_add::Field::LogAttribute(attr_path("processed_by"))),
                 value: "policy-engine".to_string(),
                 upsert: false,
             }],
@@ -1479,7 +1512,7 @@ mod tests {
 
         let transform = LogTransform {
             add: vec![LogAdd {
-                field: Some(log_add::Field::LogAttribute("should_not_exist".to_string())),
+                field: Some(log_add::Field::LogAttribute(attr_path("should_not_exist"))),
                 value: "value".to_string(),
                 upsert: false,
             }],
@@ -1522,7 +1555,7 @@ mod tests {
         // Two policies match the same log, both have transforms
         let transform1 = LogTransform {
             add: vec![LogAdd {
-                field: Some(log_add::Field::LogAttribute("tag1".to_string())),
+                field: Some(log_add::Field::LogAttribute(attr_path("tag1"))),
                 value: "from-policy1".to_string(),
                 upsert: false,
             }],
@@ -1531,7 +1564,7 @@ mod tests {
 
         let transform2 = LogTransform {
             add: vec![LogAdd {
-                field: Some(log_add::Field::LogAttribute("tag2".to_string())),
+                field: Some(log_add::Field::LogAttribute(attr_path("tag2"))),
                 value: "from-policy2".to_string(),
                 upsert: false,
             }],
@@ -1587,7 +1620,7 @@ mod tests {
 
         let transform = LogTransform {
             redact: vec![LogRedact {
-                field: Some(log_redact::Field::LogAttribute("nonexistent".to_string())),
+                field: Some(log_redact::Field::LogAttribute(attr_path("nonexistent"))),
                 replacement: "[REDACTED]".to_string(),
             }],
             ..Default::default()
@@ -1627,14 +1660,14 @@ mod tests {
 
         let transform = LogTransform {
             remove: vec![LogRemove {
-                field: Some(log_remove::Field::LogAttribute("temp".to_string())),
+                field: Some(log_remove::Field::LogAttribute(attr_path("temp"))),
             }],
             redact: vec![LogRedact {
-                field: Some(log_redact::Field::LogAttribute("secret".to_string())),
+                field: Some(log_redact::Field::LogAttribute(attr_path("secret"))),
                 replacement: "[REDACTED]".to_string(),
             }],
             add: vec![LogAdd {
-                field: Some(log_add::Field::LogAttribute("processed".to_string())),
+                field: Some(log_add::Field::LogAttribute(attr_path("processed"))),
                 value: "true".to_string(),
                 upsert: false,
             }],
@@ -1686,12 +1719,12 @@ mod tests {
 
         let transform = LogTransform {
             remove: vec![LogRemove {
-                field: Some(log_remove::Field::LogAttribute("nonexistent".to_string())),
+                field: Some(log_remove::Field::LogAttribute(attr_path("nonexistent"))),
             }],
             redact: vec![LogRedact {
-                field: Some(log_redact::Field::LogAttribute(
-                    "also_nonexistent".to_string(),
-                )),
+                field: Some(log_redact::Field::LogAttribute(attr_path(
+                    "also_nonexistent",
+                ))),
                 replacement: "[REDACTED]".to_string(),
             }],
             ..Default::default()
@@ -1738,7 +1771,7 @@ mod tests {
 
         let transform = LogTransform {
             add: vec![LogAdd {
-                field: Some(log_add::Field::LogAttribute("tag".to_string())),
+                field: Some(log_add::Field::LogAttribute(attr_path("tag"))),
                 value: "value".to_string(),
                 upsert: false,
             }],
@@ -1777,7 +1810,7 @@ mod tests {
 
         let transform = LogTransform {
             add: vec![LogAdd {
-                field: Some(log_add::Field::LogAttribute("count".to_string())),
+                field: Some(log_add::Field::LogAttribute(attr_path("count"))),
                 value: "1".to_string(),
                 upsert: true, // Use upsert so it always succeeds
             }],

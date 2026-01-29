@@ -56,12 +56,14 @@ impl ApiPolicyProvider {
             field: Some(log_matcher::Field::LogField(LogField::SeverityText.into())),
             r#match: Some(log_matcher::Match::Exact(severity.to_string())),
             negate: false,
+            case_insensitive: false,
         };
 
         let log_target = LogTarget {
             r#match: vec![matcher],
             keep: keep.to_string(),
             transform: None,
+            sample_key: None,
         };
 
         let proto = ProtoPolicy {
