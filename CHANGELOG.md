@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.0](https://github.com/usetero/policy-rs/compare/v1.2.0...v1.3.0) (2026-01-30)
+
+
+### Features
+
+* upgrade to policy spec 1.2.0 ([#29](https://github.com/usetero/policy-rs/issues/29)) ([ea28749](https://github.com/usetero/policy-rs/commit/ea28749cc35612132aff7dac3145122ec5b29626))
+
+
+### Bug Fixes
+
+* add back protos ([#32](https://github.com/usetero/policy-rs/issues/32)) ([5d8c5a8](https://github.com/usetero/policy-rs/commit/5d8c5a8ee5806aa44780eb865cfc44674f5230a9))
+* ci validate ([#31](https://github.com/usetero/policy-rs/issues/31)) ([9995ceb](https://github.com/usetero/policy-rs/commit/9995ceb63fc810a097db2ab71927549eb84375fd))
+
 ## [1.2.0](https://github.com/usetero/policy-rs/compare/v1.1.3...v1.2.0) (2026-01-22)
 
 
