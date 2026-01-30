@@ -23,4 +23,5 @@ Thumbs.db
 # Environment files
 .env
 .env.local
-/proto/
+# Task signoff requires protos, so for now we'll keep these in.
+# /proto/
