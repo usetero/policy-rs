@@ -2,8 +2,10 @@
 
 #![allow(dead_code)]
 
-use policy_rs::proto::tero::policy::v1::LogField;
-use policy_rs::{LogFieldSelector, Matchable, Transformable};
+use policy_rs::proto::tero::policy::v1::{LogField, MetricField, MetricType};
+use policy_rs::{
+    LogFieldSelector, LogSignal, Matchable, MetricFieldSelector, MetricSignal, Transformable,
+};
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -39,6 +41,8 @@ impl LogRecord {
 }
 
 impl Matchable for LogRecord {
+    type Signal = LogSignal;
+
     fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
         match field {
             LogFieldSelector::Simple(log_field) => match log_field {
@@ -101,21 +105,21 @@ impl Transformable for LogRecord {
                 _ => false,
             },
             LogFieldSelector::LogAttribute(path) => {
-                if let Some(key) = path.first() {
-                    if self.attributes.contains_key(key) {
-                        self.attributes.insert(key.clone(), replacement.to_string());
-                        return true;
-                    }
+                if let Some(key) = path.first()
+                    && self.attributes.contains_key(key)
+                {
+                    self.attributes.insert(key.clone(), replacement.to_string());
+                    return true;
                 }
                 false
             }
             LogFieldSelector::ResourceAttribute(path) => {
-                if let Some(key) = path.first() {
-                    if self.resource_attributes.contains_key(key) {
-                        self.resource_attributes
-                            .insert(key.clone(), replacement.to_string());
-                        return true;
-                    }
+                if let Some(key) = path.first()
+                    && self.resource_attributes.contains_key(key)
+                {
+                    self.resource_attributes
+                        .insert(key.clone(), replacement.to_string());
+                    return true;
                 }
                 false
             }
@@ -208,6 +212,67 @@ pub fn print_log(log: &LogRecord) {
         println!("  Resource Attributes:");
         for (k, v) in &log.resource_attributes {
             println!("    {}: {}", k, v);
+        }
+    }
+}
+
+/// A simple metric record for demonstration.
+#[derive(Debug, Clone)]
+pub struct MetricRecord {
+    pub name: String,
+    pub metric_type: Option<MetricType>,
+    pub datapoint_attributes: HashMap<String, String>,
+    pub resource_attributes: HashMap<String, String>,
+}
+
+impl MetricRecord {
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            metric_type: None,
+            datapoint_attributes: HashMap::new(),
+            resource_attributes: HashMap::new(),
+        }
+    }
+
+    pub fn with_type(mut self, t: MetricType) -> Self {
+        self.metric_type = Some(t);
+        self
+    }
+
+    pub fn with_datapoint_attr(mut self, key: &str, value: &str) -> Self {
+        self.datapoint_attributes
+            .insert(key.to_string(), value.to_string());
+        self
+    }
+
+    pub fn with_resource_attr(mut self, key: &str, value: &str) -> Self {
+        self.resource_attributes
+            .insert(key.to_string(), value.to_string());
+        self
+    }
+}
+
+impl Matchable for MetricRecord {
+    type Signal = MetricSignal;
+
+    fn get_field(&self, field: &MetricFieldSelector) -> Option<Cow<'_, str>> {
+        match field {
+            MetricFieldSelector::Simple(MetricField::Name) => Some(Cow::Borrowed(&self.name)),
+            MetricFieldSelector::Simple(_) => None,
+            MetricFieldSelector::DatapointAttribute(path) => path
+                .first()
+                .and_then(|key| self.datapoint_attributes.get(key))
+                .map(|s| Cow::Borrowed(s.as_str())),
+            MetricFieldSelector::ResourceAttribute(path) => path
+                .first()
+                .and_then(|key| self.resource_attributes.get(key))
+                .map(|s| Cow::Borrowed(s.as_str())),
+            MetricFieldSelector::Type => self
+                .metric_type
+                .as_ref()
+                .map(|t| Cow::Borrowed(t.as_str_name())),
+            _ => None,
         }
     }
 }

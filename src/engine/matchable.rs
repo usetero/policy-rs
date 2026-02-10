@@ -2,18 +2,20 @@
 
 use std::borrow::Cow;
 
-use crate::field::LogFieldSelector;
+use super::signal::Signal;
 
 /// Trait for types that can be matched against policies.
 ///
-/// Implementors provide field access for log records by implementing
+/// Implementors provide field access for telemetry records by implementing
 /// the single `get_field` method. This enables the policy engine to
 /// extract field values for pattern matching.
 ///
+/// The associated `Signal` type determines which field selector is used,
+/// binding this implementation to a specific telemetry signal (logs, metrics, etc.).
+///
 /// # Path-based Attribute Access
 ///
-/// For attribute selectors (`LogAttribute`, `ResourceAttribute`, `ScopeAttribute`),
-/// the path is a `Vec<String>` representing nested attribute access:
+/// For attribute selectors, the path is a `Vec<String>` representing nested attribute access:
 ///
 /// - Single segment `["user_id"]` - access a flat attribute
 /// - Multiple segments `["http", "method"]` - traverse nested maps/objects
@@ -21,7 +23,7 @@ use crate::field::LogFieldSelector;
 ///
 /// # Implementation Guidelines
 ///
-/// 1. **Simple Fields**: Return the field value directly for `LogFieldSelector::Simple`
+/// 1. **Simple Fields**: Return the field value directly for the signal's simple field enum
 /// 2. **Flat Attributes**: For single-segment paths, use the first element as the key
 /// 3. **Nested Attributes**: For multi-segment paths, traverse the nested structure
 /// 4. **Missing Fields**: Return `None` if the field or any intermediate path doesn't exist
@@ -31,6 +33,8 @@ use crate::field::LogFieldSelector;
 ///
 /// ```ignore
 /// impl Matchable for MyLog {
+///     type Signal = LogSignal;
+///
 ///     fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
 ///         match field {
 ///             LogFieldSelector::Simple(f) => match f {
@@ -38,7 +42,6 @@ use crate::field::LogFieldSelector;
 ///                 _ => None,
 ///             },
 ///             LogFieldSelector::LogAttribute(path) => {
-///                 // Traverse nested attributes using the path
 ///                 self.traverse_attributes(&self.log_attributes, path)
 ///             }
 ///             _ => None,
@@ -47,6 +50,9 @@ use crate::field::LogFieldSelector;
 /// }
 /// ```
 pub trait Matchable {
+    /// The telemetry signal type this implementation handles.
+    type Signal: Signal;
+
     /// Get a field value by selector.
     ///
     /// Returns `None` for fields that don't exist or aren't applicable.
@@ -55,12 +61,14 @@ pub trait Matchable {
     ///
     /// For attribute selectors with multi-segment paths, traverse the nested
     /// structure and return the leaf value as a string.
-    fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>>;
+    fn get_field(&self, field: &<Self::Signal as Signal>::FieldSelector) -> Option<Cow<'_, str>>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::signal::LogSignal;
+    use crate::field::LogFieldSelector;
     use crate::proto::tero::policy::v1::LogField;
     use std::borrow::Cow;
     use std::collections::HashMap;
@@ -74,6 +82,8 @@ mod tests {
     }
 
     impl Matchable for TestLog {
+        type Signal = LogSignal;
+
         fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
             match field {
                 LogFieldSelector::Simple(log_field) => match log_field {
@@ -162,6 +172,8 @@ mod tests {
     }
 
     impl Matchable for NestedTestLog {
+        type Signal = LogSignal;
+
         fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
             match field {
                 LogFieldSelector::Simple(log_field) => match log_field {
@@ -278,10 +290,11 @@ mod tests {
 
     #[test]
     fn get_field_returns_owned_value() {
-        // Test that Cow::Owned values work correctly
         struct ComputedLog;
 
         impl Matchable for ComputedLog {
+            type Signal = LogSignal;
+
             fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
                 match field {
                     LogFieldSelector::Simple(LogField::Body) => {
@@ -296,7 +309,6 @@ mod tests {
         let value = log.get_field(&LogFieldSelector::Simple(LogField::Body));
         assert_eq!(value.as_deref(), Some("computed value"));
 
-        // Verify it's actually an owned value
         if let Some(Cow::Owned(s)) = value {
             assert_eq!(s, "computed value");
         } else {
@@ -308,7 +320,6 @@ mod tests {
 
     #[test]
     fn nested_path_single_level() {
-        // Single level: log_attribute: ["user_id"]
         let log = NestedTestLog::new("test").with_log_attr("user_id", str_val("12345"));
 
         let result = log.get_field(&LogFieldSelector::LogAttribute(vec!["user_id".to_string()]));
@@ -317,7 +328,6 @@ mod tests {
 
     #[test]
     fn nested_path_two_levels() {
-        // Two levels: log_attribute: ["http", "method"]
         let log = NestedTestLog::new("test").with_log_attr(
             "http",
             map_val(vec![
@@ -341,7 +351,6 @@ mod tests {
 
     #[test]
     fn nested_path_three_levels() {
-        // Three levels: log_attribute: ["request", "headers", "content_type"]
         let log = NestedTestLog::new("test").with_log_attr(
             "request",
             map_val(vec![
@@ -370,7 +379,6 @@ mod tests {
         ]));
         assert_eq!(result.as_deref(), Some("Bearer token123"));
 
-        // Also verify two-level access still works
         let result = log.get_field(&LogFieldSelector::LogAttribute(vec![
             "request".to_string(),
             "body".to_string(),
@@ -380,7 +388,6 @@ mod tests {
 
     #[test]
     fn nested_path_four_levels() {
-        // Four levels: log_attribute: ["service", "config", "database", "host"]
         let log = NestedTestLog::new("test").with_log_attr(
             "service",
             map_val(vec![(
@@ -417,7 +424,6 @@ mod tests {
         let log = NestedTestLog::new("test")
             .with_log_attr("http", map_val(vec![("method", str_val("GET"))]));
 
-        // Try to access a path where an intermediate key doesn't exist
         let result = log.get_field(&LogFieldSelector::LogAttribute(vec![
             "http".to_string(),
             "nonexistent".to_string(),
@@ -431,7 +437,6 @@ mod tests {
         let log = NestedTestLog::new("test")
             .with_log_attr("http", map_val(vec![("method", str_val("GET"))]));
 
-        // Try to traverse through a string value (should fail)
         let result = log.get_field(&LogFieldSelector::LogAttribute(vec![
             "http".to_string(),
             "method".to_string(),
@@ -450,7 +455,6 @@ mod tests {
 
     #[test]
     fn nested_path_resource_attributes() {
-        // Test nested paths work for resource attributes too
         let log = NestedTestLog::new("test").with_resource_attr(
             "k8s",
             map_val(vec![
@@ -488,7 +492,6 @@ mod tests {
 
     #[test]
     fn nested_path_scope_attributes() {
-        // Test nested paths work for scope attributes too
         let log = NestedTestLog::new("test").with_scope_attr(
             "instrumentation",
             map_val(vec![
@@ -531,11 +534,9 @@ mod tests {
 
     #[test]
     fn nested_path_accessing_map_as_value_returns_none() {
-        // When the path points to a map (not a string), return None
         let log = NestedTestLog::new("test")
             .with_log_attr("http", map_val(vec![("method", str_val("GET"))]));
 
-        // Accessing just "http" should return None because it's a map, not a string
         let result = log.get_field(&LogFieldSelector::LogAttribute(vec!["http".to_string()]));
         assert_eq!(result, None);
     }

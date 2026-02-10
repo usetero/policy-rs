@@ -1,45 +1,67 @@
-//! Transformable trait for applying mutations to log records.
+//! Transformable trait for applying mutations to telemetry records.
 
-use crate::field::LogFieldSelector;
+use super::matchable::Matchable;
+use super::signal::Signal;
 
 /// Trait for types that can be transformed by policies.
 ///
 /// This uses a visitor pattern where the policy engine calls these methods
 /// to apply transformations, and the implementor handles the actual mutations
-/// to their log data structure.
+/// to their data structure.
 ///
 /// Each method returns `true` if the operation was successfully applied.
-pub trait Transformable {
+///
+/// `Transformable` requires `Matchable` so that the `Signal` associated type
+/// is shared — ensuring transforms operate on the same field selector type
+/// used for matching.
+pub trait Transformable: Matchable {
     /// Remove a field entirely.
     ///
     /// Returns `true` if the field existed and was removed.
-    fn remove_field(&mut self, field: &LogFieldSelector) -> bool;
+    fn remove_field(&mut self, field: &<Self::Signal as Signal>::FieldSelector) -> bool;
 
     /// Redact a field by replacing its value with the replacement string.
     ///
     /// Returns `true` if the field existed and was redacted.
-    fn redact_field(&mut self, field: &LogFieldSelector, replacement: &str) -> bool;
+    fn redact_field(
+        &mut self,
+        field: &<Self::Signal as Signal>::FieldSelector,
+        replacement: &str,
+    ) -> bool;
 
     /// Rename a field by moving it from one location to another.
     ///
     /// The `to` parameter is the new attribute key name. For simple fields,
-    /// this moves the value to a log attribute with the given name.
+    /// this moves the value to an attribute with the given name.
     ///
     /// If `upsert` is false and the target already exists, do nothing and return false.
     /// Returns `true` if the rename was performed.
-    fn rename_field(&mut self, from: &LogFieldSelector, to: &str, upsert: bool) -> bool;
+    fn rename_field(
+        &mut self,
+        from: &<Self::Signal as Signal>::FieldSelector,
+        to: &str,
+        upsert: bool,
+    ) -> bool;
 
     /// Add a new field with the given value.
     ///
     /// If `upsert` is false and the field already exists, do nothing and return false.
     /// Returns `true` if the field was added or updated.
-    fn add_field(&mut self, field: &LogFieldSelector, value: &str, upsert: bool) -> bool;
+    fn add_field(
+        &mut self,
+        field: &<Self::Signal as Signal>::FieldSelector,
+        value: &str,
+        upsert: bool,
+    ) -> bool;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::signal::LogSignal;
+    use crate::field::LogFieldSelector;
     use crate::proto::tero::policy::v1::LogField;
+    use std::borrow::Cow;
     use std::collections::HashMap;
 
     struct TestLog {
@@ -65,6 +87,14 @@ mod tests {
         fn with_attr(mut self, key: &str, value: &str) -> Self {
             self.attributes.insert(key.to_string(), value.to_string());
             self
+        }
+    }
+
+    impl Matchable for TestLog {
+        type Signal = LogSignal;
+
+        fn get_field(&self, _field: &LogFieldSelector) -> Option<Cow<'_, str>> {
+            None // Not used by transformable tests
         }
     }
 
@@ -121,12 +151,10 @@ mod tests {
         }
 
         fn rename_field(&mut self, from: &LogFieldSelector, to: &str, upsert: bool) -> bool {
-            // Check if target exists
             if !upsert && self.attributes.contains_key(to) {
                 return false;
             }
 
-            // Get the value from source
             let value = match from {
                 LogFieldSelector::Simple(log_field) => match log_field {
                     LogField::Body => self.body.take(),
@@ -139,7 +167,6 @@ mod tests {
                 _ => None,
             };
 
-            // Set the value at target
             if let Some(v) = value {
                 self.attributes.insert(to.to_string(), v);
                 true
@@ -252,12 +279,10 @@ mod tests {
             "target",
             false
         ));
-        // Source should still exist
         assert_eq!(
             log.attributes.get("source"),
             Some(&"source_value".to_string())
         );
-        // Target should be unchanged
         assert_eq!(
             log.attributes.get("target"),
             Some(&"target_value".to_string())

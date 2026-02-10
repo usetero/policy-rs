@@ -1,6 +1,6 @@
-//! Field selection utilities for log records.
+//! Field selection utilities for telemetry records.
 
-use crate::proto::tero::policy::v1::{AttributePath, LogField};
+use crate::proto::tero::policy::v1::{AttributePath, LogField, MetricField};
 
 /// Represents a field selector for log records.
 ///
@@ -72,6 +72,55 @@ impl LogFieldSelector {
         self.attribute_path()
             .and_then(|p| p.first())
             .map(|s| s.as_str())
+    }
+}
+
+/// Represents a field selector for metric records.
+///
+/// Attribute selectors use a path (Vec<String>) to support nested attribute access.
+/// For example, `["host", "name"]` accesses `attributes["host"]["name"]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MetricFieldSelector {
+    /// Simple metric field (name, description, unit, etc.)
+    Simple(MetricField),
+    /// Data point attribute by path
+    DatapointAttribute(Vec<String>),
+    /// Resource attribute by path
+    ResourceAttribute(Vec<String>),
+    /// Scope attribute by path
+    ScopeAttribute(Vec<String>),
+    /// Metric type field — selects the metric's type (Gauge, Sum, Histogram, etc.)
+    Type,
+    /// Aggregation temporality field — selects the metric's temporality (Delta, Cumulative)
+    Temporality,
+}
+
+impl MetricFieldSelector {
+    /// Create a MetricFieldSelector from an AttributePath for datapoint attributes.
+    pub fn from_datapoint_attribute(path: &AttributePath) -> Self {
+        MetricFieldSelector::DatapointAttribute(path.path.clone())
+    }
+
+    /// Create a MetricFieldSelector from an AttributePath for resource attributes.
+    pub fn from_resource_attribute(path: &AttributePath) -> Self {
+        MetricFieldSelector::ResourceAttribute(path.path.clone())
+    }
+
+    /// Create a MetricFieldSelector from an AttributePath for scope attributes.
+    pub fn from_scope_attribute(path: &AttributePath) -> Self {
+        MetricFieldSelector::ScopeAttribute(path.path.clone())
+    }
+
+    /// Returns the attribute path if this is an attribute selector.
+    pub fn attribute_path(&self) -> Option<&[String]> {
+        match self {
+            MetricFieldSelector::DatapointAttribute(p)
+            | MetricFieldSelector::ResourceAttribute(p)
+            | MetricFieldSelector::ScopeAttribute(p) => Some(p),
+            MetricFieldSelector::Simple(_)
+            | MetricFieldSelector::Type
+            | MetricFieldSelector::Temporality => None,
+        }
     }
 }
 
