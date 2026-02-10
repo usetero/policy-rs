@@ -1996,9 +1996,8 @@ mod tests {
     fn should_keep_percentage_without_key_uses_random() {
         // Without a sample key, decisions vary (random)
         // We can't test randomness directly, but we can verify it works
-        let decision = should_keep_percentage(0.5, None);
-        // Just verify it returns a boolean without panicking
-        assert!(decision || !decision);
+        // Just verify it returns without panicking
+        let _decision = should_keep_percentage(0.5, None);
     }
 
     #[tokio::test]
@@ -2752,6 +2751,127 @@ mod tests {
         let metric2 = TestMetric::new()
             .with_name("cpu.usage")
             .with_datapoint_attr("debug", "true");
+        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_description_matcher() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_metric_policy(
+            "drop-by-desc",
+            vec![MetricMatcher {
+                field: Some(metric_matcher::Field::MetricField(
+                    MetricField::Description.into(),
+                )),
+                r#match: Some(metric_matcher::Match::Regex("internal".to_string())),
+                negate: false,
+                case_insensitive: false,
+            }],
+            false,
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let metric1 = TestMetric::new()
+            .with_name("gc.pause")
+            .with_description("internal gc pause time");
+        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        assert_eq!(
+            result1,
+            EvaluateResult::Drop {
+                policy_id: "drop-by-desc".to_string(),
+            }
+        );
+
+        let metric2 = TestMetric::new()
+            .with_name("gc.pause")
+            .with_description("garbage collection pause");
+        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_unit_matcher() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_metric_policy(
+            "drop-by-unit",
+            vec![MetricMatcher {
+                field: Some(metric_matcher::Field::MetricField(MetricField::Unit.into())),
+                r#match: Some(metric_matcher::Match::Exact("ms".to_string())),
+                negate: false,
+                case_insensitive: false,
+            }],
+            false,
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let metric1 = TestMetric::new()
+            .with_name("request.duration")
+            .with_unit("ms");
+        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        assert_eq!(
+            result1,
+            EvaluateResult::Drop {
+                policy_id: "drop-by-unit".to_string(),
+            }
+        );
+
+        let metric2 = TestMetric::new()
+            .with_name("request.duration")
+            .with_unit("s");
+        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_scope_name_matcher() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_metric_policy(
+            "drop-by-scope",
+            vec![MetricMatcher {
+                field: Some(metric_matcher::Field::MetricField(
+                    MetricField::ScopeName.into(),
+                )),
+                r#match: Some(metric_matcher::Match::Regex("otel-debug".to_string())),
+                negate: false,
+                case_insensitive: false,
+            }],
+            false,
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let metric1 = TestMetric::new()
+            .with_name("cpu.usage")
+            .with_scope_name("otel-debug-sdk");
+        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        assert_eq!(
+            result1,
+            EvaluateResult::Drop {
+                policy_id: "drop-by-scope".to_string(),
+            }
+        );
+
+        let metric2 = TestMetric::new()
+            .with_name("cpu.usage")
+            .with_scope_name("otel-prod-sdk");
         let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }

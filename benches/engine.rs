@@ -856,7 +856,7 @@ fn bench_metric_evaluate_single_policy(c: &mut Criterion) {
     let snapshot = registry.snapshot();
     let engine = PolicyEngine::new();
 
-    let matching_metric = BenchMetric::new("cpu.usage");
+    let matching_metric = BenchMetric::new("cpu.usage").with_datapoint_attr("host", "prod-web-1");
     let non_matching_metric = BenchMetric::new("memory.usage");
 
     let mut group = c.benchmark_group("metric_single_policy");
