@@ -2,13 +2,25 @@
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use policy_rs::proto::tero::policy::v1::{
-    LogAdd, LogField, LogMatcher, LogRedact, LogRemove, LogRename, LogTarget, LogTransform,
-    Policy as ProtoPolicy, log_add, log_matcher, log_redact, log_remove, log_rename,
+    AttributePath, LogAdd, LogField, LogMatcher, LogRedact, LogRemove, LogRename, LogTarget,
+    LogTransform, MetricField, MetricMatcher, MetricTarget, MetricType, Policy as ProtoPolicy,
+    log_add, log_matcher, log_redact, log_remove, log_rename, metric_matcher,
 };
-use policy_rs::{LogFieldSelector, Matchable, Policy, PolicyEngine, PolicyRegistry, Transformable};
+use policy_rs::{
+    LogFieldSelector, LogSignal, Matchable, MetricFieldSelector, MetricSignal, Policy,
+    PolicyEngine, PolicyRegistry, Transformable,
+};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use tokio::runtime::Runtime;
+
+fn attr_path(key: &str) -> AttributePath {
+    AttributePath {
+        path: vec![key.to_string()],
+    }
+}
+
+// ==================== Log Benchmarks ====================
 
 /// Test log record for benchmarking.
 struct BenchLog {
@@ -33,6 +45,8 @@ impl BenchLog {
 }
 
 impl Matchable for BenchLog {
+    type Signal = LogSignal;
+
     fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
         match field {
             LogFieldSelector::Simple(log_field) => match log_field {
@@ -40,9 +54,10 @@ impl Matchable for BenchLog {
                 LogField::SeverityText => Some(Cow::Borrowed(&self.severity)),
                 _ => None,
             },
-            LogFieldSelector::LogAttribute(key) => {
-                self.attributes.get(key).map(|s| Cow::Borrowed(s.as_str()))
-            }
+            LogFieldSelector::LogAttribute(path) => path
+                .first()
+                .and_then(|key| self.attributes.get(key))
+                .map(|s| Cow::Borrowed(s.as_str())),
             _ => None,
         }
     }
@@ -51,14 +66,20 @@ impl Matchable for BenchLog {
 impl Transformable for BenchLog {
     fn remove_field(&mut self, field: &LogFieldSelector) -> bool {
         match field {
-            LogFieldSelector::LogAttribute(key) => self.attributes.remove(key).is_some(),
+            LogFieldSelector::LogAttribute(path) => path
+                .first()
+                .and_then(|key| self.attributes.remove(key))
+                .is_some(),
             _ => false,
         }
     }
 
     fn redact_field(&mut self, field: &LogFieldSelector, replacement: &str) -> bool {
         match field {
-            LogFieldSelector::LogAttribute(key) => {
+            LogFieldSelector::LogAttribute(path) => {
+                let Some(key) = path.first() else {
+                    return false;
+                };
                 if self.attributes.contains_key(key) {
                     self.attributes.insert(key.clone(), replacement.to_string());
                     true
@@ -74,18 +95,22 @@ impl Transformable for BenchLog {
         if !upsert && self.attributes.contains_key(to) {
             return false;
         }
-        if let LogFieldSelector::LogAttribute(key) = from {
-            if let Some(value) = self.attributes.remove(key) {
-                self.attributes.insert(to.to_string(), value);
-                return true;
-            }
+        if let LogFieldSelector::LogAttribute(path) = from
+            && let Some(key) = path.first()
+            && let Some(value) = self.attributes.remove(key)
+        {
+            self.attributes.insert(to.to_string(), value);
+            return true;
         }
         false
     }
 
     fn add_field(&mut self, field: &LogFieldSelector, value: &str, upsert: bool) -> bool {
         match field {
-            LogFieldSelector::LogAttribute(key) => {
+            LogFieldSelector::LogAttribute(path) => {
+                let Some(key) = path.first() else {
+                    return false;
+                };
                 if !upsert && self.attributes.contains_key(key) {
                     return false;
                 }
@@ -102,12 +127,14 @@ fn create_policy(id: &str, field: log_matcher::Field, pattern: &str, keep: &str)
         field: Some(field),
         r#match: Some(log_matcher::Match::Regex(pattern.to_string())),
         negate: false,
+        case_insensitive: false,
     };
 
     let log_target = LogTarget {
         r#match: vec![matcher],
         keep: keep.to_string(),
         transform: None,
+        sample_key: None,
     };
 
     let proto = ProtoPolicy {
@@ -134,12 +161,14 @@ fn create_policy_with_transform(
         field: Some(field),
         r#match: Some(log_matcher::Match::Regex(pattern.to_string())),
         negate: false,
+        case_insensitive: false,
     };
 
     let log_target = LogTarget {
         r#match: vec![matcher],
         keep: keep.to_string(),
         transform: Some(transform),
+        sample_key: None,
     };
 
     let proto = ProtoPolicy {
@@ -162,12 +191,13 @@ fn create_multi_matcher_policy(id: &str, patterns: Vec<(&str, &str)>, keep: &str
             let field = match field_name {
                 "body" => log_matcher::Field::LogField(LogField::Body.into()),
                 "severity" => log_matcher::Field::LogField(LogField::SeverityText.into()),
-                _ => log_matcher::Field::LogAttribute(field_name.to_string()),
+                _ => log_matcher::Field::LogAttribute(attr_path(field_name)),
             };
             LogMatcher {
                 field: Some(field),
                 r#match: Some(log_matcher::Match::Regex(pattern.to_string())),
                 negate: false,
+                case_insensitive: false,
             }
         })
         .collect();
@@ -176,6 +206,7 @@ fn create_multi_matcher_policy(id: &str, patterns: Vec<(&str, &str)>, keep: &str
         r#match: matchers,
         keep: keep.to_string(),
         transform: None,
+        sample_key: None,
     };
 
     let proto = ProtoPolicy {
@@ -378,7 +409,7 @@ fn bench_transform_operations(c: &mut Criterion) {
             "remove",
             LogTransform {
                 remove: vec![LogRemove {
-                    field: Some(log_remove::Field::LogAttribute("to_remove".to_string())),
+                    field: Some(log_remove::Field::LogAttribute(attr_path("to_remove"))),
                 }],
                 ..Default::default()
             },
@@ -387,7 +418,7 @@ fn bench_transform_operations(c: &mut Criterion) {
             "redact",
             LogTransform {
                 redact: vec![LogRedact {
-                    field: Some(log_redact::Field::LogAttribute("secret".to_string())),
+                    field: Some(log_redact::Field::LogAttribute(attr_path("secret"))),
                     replacement: "[REDACTED]".to_string(),
                 }],
                 ..Default::default()
@@ -397,7 +428,7 @@ fn bench_transform_operations(c: &mut Criterion) {
             "rename",
             LogTransform {
                 rename: vec![LogRename {
-                    from: Some(log_rename::From::FromLogAttribute("old_key".to_string())),
+                    from: Some(log_rename::From::FromLogAttribute(attr_path("old_key"))),
                     to: "new_key".to_string(),
                     upsert: true,
                 }],
@@ -408,7 +439,7 @@ fn bench_transform_operations(c: &mut Criterion) {
             "add",
             LogTransform {
                 add: vec![LogAdd {
-                    field: Some(log_add::Field::LogAttribute("new_field".to_string())),
+                    field: Some(log_add::Field::LogAttribute(attr_path("new_field"))),
                     value: "new_value".to_string(),
                     upsert: false,
                 }],
@@ -465,19 +496,31 @@ fn bench_transform_combined(c: &mut Criterion) {
         for i in 0..op_count {
             match i % 4 {
                 0 => transform.remove.push(LogRemove {
-                    field: Some(log_remove::Field::LogAttribute(format!("remove_{}", i))),
+                    field: Some(log_remove::Field::LogAttribute(attr_path(&format!(
+                        "remove_{}",
+                        i
+                    )))),
                 }),
                 1 => transform.redact.push(LogRedact {
-                    field: Some(log_redact::Field::LogAttribute(format!("redact_{}", i))),
+                    field: Some(log_redact::Field::LogAttribute(attr_path(&format!(
+                        "redact_{}",
+                        i
+                    )))),
                     replacement: "[REDACTED]".to_string(),
                 }),
                 2 => transform.rename.push(LogRename {
-                    from: Some(log_rename::From::FromLogAttribute(format!("rename_{}", i))),
+                    from: Some(log_rename::From::FromLogAttribute(attr_path(&format!(
+                        "rename_{}",
+                        i
+                    )))),
                     to: format!("renamed_{}", i),
                     upsert: true,
                 }),
                 _ => transform.add.push(LogAdd {
-                    field: Some(log_add::Field::LogAttribute(format!("add_{}", i))),
+                    field: Some(log_add::Field::LogAttribute(attr_path(&format!(
+                        "add_{}",
+                        i
+                    )))),
                     value: "added_value".to_string(),
                     upsert: false,
                 }),
@@ -540,11 +583,17 @@ fn bench_transform_multiple_policies(c: &mut Criterion) {
             .map(|i| {
                 let transform = LogTransform {
                     redact: vec![LogRedact {
-                        field: Some(log_redact::Field::LogAttribute(format!("secret_{}", i))),
+                        field: Some(log_redact::Field::LogAttribute(attr_path(&format!(
+                            "secret_{}",
+                            i
+                        )))),
                         replacement: "[REDACTED]".to_string(),
                     }],
                     add: vec![LogAdd {
-                        field: Some(log_add::Field::LogAttribute(format!("processed_{}", i))),
+                        field: Some(log_add::Field::LogAttribute(attr_path(&format!(
+                            "processed_{}",
+                            i
+                        )))),
                         value: "true".to_string(),
                         upsert: false,
                     }],
@@ -598,11 +647,11 @@ fn bench_transform_overhead(c: &mut Criterion) {
 
     let transform = LogTransform {
         redact: vec![LogRedact {
-            field: Some(log_redact::Field::LogAttribute("password".to_string())),
+            field: Some(log_redact::Field::LogAttribute(attr_path("password"))),
             replacement: "[REDACTED]".to_string(),
         }],
         add: vec![LogAdd {
-            field: Some(log_add::Field::LogAttribute("sanitized".to_string())),
+            field: Some(log_add::Field::LogAttribute(attr_path("sanitized"))),
             value: "true".to_string(),
             upsert: false,
         }],
@@ -655,19 +704,19 @@ fn bench_transform_throughput(c: &mut Criterion) {
     let transform = LogTransform {
         redact: vec![
             LogRedact {
-                field: Some(log_redact::Field::LogAttribute("password".to_string())),
+                field: Some(log_redact::Field::LogAttribute(attr_path("password"))),
                 replacement: "[REDACTED]".to_string(),
             },
             LogRedact {
-                field: Some(log_redact::Field::LogAttribute("api_key".to_string())),
+                field: Some(log_redact::Field::LogAttribute(attr_path("api_key"))),
                 replacement: "[REDACTED]".to_string(),
             },
         ],
         remove: vec![LogRemove {
-            field: Some(log_remove::Field::LogAttribute("debug_info".to_string())),
+            field: Some(log_remove::Field::LogAttribute(attr_path("debug_info"))),
         }],
         add: vec![LogAdd {
-            field: Some(log_add::Field::LogAttribute("processed".to_string())),
+            field: Some(log_add::Field::LogAttribute(attr_path("processed"))),
             value: "true".to_string(),
             upsert: false,
         }],
@@ -711,6 +760,274 @@ fn bench_transform_throughput(c: &mut Criterion) {
     group.finish();
 }
 
+// ==================== Metric Benchmarks ====================
+
+/// Test metric record for benchmarking.
+struct BenchMetric {
+    name: String,
+    metric_type: Option<MetricType>,
+    datapoint_attributes: HashMap<String, String>,
+}
+
+impl BenchMetric {
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            metric_type: None,
+            datapoint_attributes: HashMap::new(),
+        }
+    }
+
+    fn with_type(mut self, t: MetricType) -> Self {
+        self.metric_type = Some(t);
+        self
+    }
+
+    fn with_datapoint_attr(mut self, key: &str, value: &str) -> Self {
+        self.datapoint_attributes
+            .insert(key.to_string(), value.to_string());
+        self
+    }
+}
+
+impl Matchable for BenchMetric {
+    type Signal = MetricSignal;
+
+    fn get_field(&self, field: &MetricFieldSelector) -> Option<Cow<'_, str>> {
+        match field {
+            MetricFieldSelector::Simple(MetricField::Name) => Some(Cow::Borrowed(&self.name)),
+            MetricFieldSelector::Simple(_) => None,
+            MetricFieldSelector::DatapointAttribute(path) => path
+                .first()
+                .and_then(|key| self.datapoint_attributes.get(key))
+                .map(|s| Cow::Borrowed(s.as_str())),
+            MetricFieldSelector::Type => self
+                .metric_type
+                .as_ref()
+                .map(|t| Cow::Borrowed(t.as_str_name())),
+            _ => None,
+        }
+    }
+}
+
+fn create_metric_policy(
+    id: &str,
+    field: metric_matcher::Field,
+    pattern: &str,
+    keep: bool,
+) -> Policy {
+    let matcher = MetricMatcher {
+        field: Some(field),
+        r#match: Some(metric_matcher::Match::Regex(pattern.to_string())),
+        negate: false,
+        case_insensitive: false,
+    };
+
+    let metric_target = MetricTarget {
+        r#match: vec![matcher],
+        keep,
+    };
+
+    let proto = ProtoPolicy {
+        id: id.to_string(),
+        name: id.to_string(),
+        enabled: true,
+        target: Some(policy_rs::proto::tero::policy::v1::policy::Target::Metric(
+            metric_target,
+        )),
+        ..Default::default()
+    };
+
+    Policy::new(proto)
+}
+
+fn bench_metric_evaluate_single_policy(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+
+    let registry = PolicyRegistry::new();
+    let handle = registry.register_provider();
+    handle.update(vec![create_metric_policy(
+        "drop-cpu",
+        metric_matcher::Field::MetricField(MetricField::Name.into()),
+        "cpu",
+        false,
+    )]);
+
+    let snapshot = registry.snapshot();
+    let engine = PolicyEngine::new();
+
+    let matching_metric = BenchMetric::new("cpu.usage");
+    let non_matching_metric = BenchMetric::new("memory.usage");
+
+    let mut group = c.benchmark_group("metric_single_policy");
+
+    group.bench_function("matching", |b| {
+        b.to_async(&rt).iter(|| async {
+            black_box(engine.evaluate(&snapshot, &matching_metric).await.unwrap())
+        })
+    });
+
+    group.bench_function("non_matching", |b| {
+        b.to_async(&rt).iter(|| async {
+            black_box(
+                engine
+                    .evaluate(&snapshot, &non_matching_metric)
+                    .await
+                    .unwrap(),
+            )
+        })
+    });
+
+    group.finish();
+}
+
+fn bench_metric_evaluate_multiple_policies(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+
+    let mut group = c.benchmark_group("metric_policy_count");
+
+    for policy_count in [1, 10, 50, 100] {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policies: Vec<Policy> = (0..policy_count)
+            .map(|i| {
+                create_metric_policy(
+                    &format!("policy-{}", i),
+                    metric_matcher::Field::MetricField(MetricField::Name.into()),
+                    &format!("pattern{}", i),
+                    false,
+                )
+            })
+            .collect();
+        handle.update(policies);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Metric that matches none of the policies
+        let metric = BenchMetric::new("this.metric.matches.nothing");
+
+        group.throughput(Throughput::Elements(1));
+        group.bench_with_input(
+            BenchmarkId::new("evaluate", policy_count),
+            &policy_count,
+            |b, _| {
+                b.to_async(&rt).iter(|| async {
+                    black_box(engine.evaluate(&snapshot, &metric).await.unwrap())
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_metric_throughput(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+
+    let registry = PolicyRegistry::new();
+    let handle = registry.register_provider();
+
+    // Create metric type matchers using the MetricType oneof field
+    let gauge_matcher = MetricMatcher {
+        field: Some(metric_matcher::Field::MetricType(MetricType::Gauge.into())),
+        r#match: None,
+        negate: false,
+        case_insensitive: false,
+    };
+    let sum_matcher = MetricMatcher {
+        field: Some(metric_matcher::Field::MetricType(MetricType::Sum.into())),
+        r#match: None,
+        negate: false,
+        case_insensitive: false,
+    };
+    let histogram_matcher = MetricMatcher {
+        field: Some(metric_matcher::Field::MetricType(
+            MetricType::Histogram.into(),
+        )),
+        r#match: None,
+        negate: false,
+        case_insensitive: false,
+    };
+
+    let keep_gauges = {
+        let proto = ProtoPolicy {
+            id: "keep-gauges".to_string(),
+            name: "keep-gauges".to_string(),
+            enabled: true,
+            target: Some(policy_rs::proto::tero::policy::v1::policy::Target::Metric(
+                MetricTarget {
+                    r#match: vec![gauge_matcher],
+                    keep: true,
+                },
+            )),
+            ..Default::default()
+        };
+        Policy::new(proto)
+    };
+    let drop_sums = {
+        let proto = ProtoPolicy {
+            id: "drop-sums".to_string(),
+            name: "drop-sums".to_string(),
+            enabled: true,
+            target: Some(policy_rs::proto::tero::policy::v1::policy::Target::Metric(
+                MetricTarget {
+                    r#match: vec![sum_matcher],
+                    keep: false,
+                },
+            )),
+            ..Default::default()
+        };
+        Policy::new(proto)
+    };
+    let keep_histograms = {
+        let proto = ProtoPolicy {
+            id: "keep-histograms".to_string(),
+            name: "keep-histograms".to_string(),
+            enabled: true,
+            target: Some(policy_rs::proto::tero::policy::v1::policy::Target::Metric(
+                MetricTarget {
+                    r#match: vec![histogram_matcher],
+                    keep: true,
+                },
+            )),
+            ..Default::default()
+        };
+        Policy::new(proto)
+    };
+
+    handle.update(vec![keep_gauges, drop_sums, keep_histograms]);
+
+    let snapshot = registry.snapshot();
+    let engine = PolicyEngine::new();
+
+    // Create a batch of metrics
+    let metrics: Vec<BenchMetric> = (0..1000)
+        .map(|i| {
+            let (name, metric_type) = match i % 3 {
+                0 => ("cpu.usage", MetricType::Gauge),
+                1 => ("requests.total", MetricType::Sum),
+                _ => ("request.duration", MetricType::Histogram),
+            };
+            BenchMetric::new(name).with_type(metric_type)
+        })
+        .collect();
+
+    let mut group = c.benchmark_group("metric_throughput");
+    group.throughput(Throughput::Elements(metrics.len() as u64));
+
+    group.bench_function("batch_1000", |b| {
+        b.to_async(&rt).iter(|| async {
+            for metric in &metrics {
+                black_box(engine.evaluate(&snapshot, metric).await.unwrap());
+            }
+        })
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_evaluate_single_policy,
@@ -722,6 +1039,9 @@ criterion_group!(
     bench_transform_multiple_policies,
     bench_transform_overhead,
     bench_transform_throughput,
+    bench_metric_evaluate_single_policy,
+    bench_metric_evaluate_multiple_policies,
+    bench_metric_throughput,
 );
 
 criterion_main!(benches);
