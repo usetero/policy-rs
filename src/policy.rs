@@ -1,6 +1,6 @@
 //! Policy wrapper type with convenience methods.
 
-use crate::proto::tero::policy::v1::{LogTarget, Policy as ProtoPolicy};
+use crate::proto::tero::policy::v1::{LogTarget, MetricTarget, Policy as ProtoPolicy};
 
 /// A wrapper around the protobuf Policy with convenience methods.
 #[derive(Debug, Clone)]
@@ -38,6 +38,14 @@ impl Policy {
     pub fn log_target(&self) -> Option<&LogTarget> {
         match &self.proto.target {
             Some(crate::proto::tero::policy::v1::policy::Target::Log(t)) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// Get the metric target if this is a metric policy.
+    pub fn metric_target(&self) -> Option<&MetricTarget> {
+        match &self.proto.target {
+            Some(crate::proto::tero::policy::v1::policy::Target::Metric(t)) => Some(t),
             _ => None,
         }
     }

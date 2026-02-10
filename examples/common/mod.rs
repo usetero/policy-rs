@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use policy_rs::proto::tero::policy::v1::LogField;
-use policy_rs::{LogFieldSelector, Matchable, Transformable};
+use policy_rs::{LogFieldSelector, LogSignal, Matchable, Transformable};
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -39,6 +39,8 @@ impl LogRecord {
 }
 
 impl Matchable for LogRecord {
+    type Signal = LogSignal;
+
     fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
         match field {
             LogFieldSelector::Simple(log_field) => match log_field {

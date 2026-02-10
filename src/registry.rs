@@ -9,6 +9,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::Policy;
 use crate::engine::CompiledMatchers;
+use crate::engine::signal::{LogSignal, MetricSignal};
 use crate::error::PolicyError;
 use crate::provider::PolicyProvider;
 
@@ -148,8 +149,10 @@ struct SnapshotInner {
     policies: Vec<PolicyEntry>,
     /// Index from policy ID to position in policies vec.
     index: HashMap<String, usize>,
-    /// Compiled matchers for efficient evaluation.
-    compiled: Option<CompiledMatchers>,
+    /// Compiled matchers for log policies.
+    compiled_logs: Option<CompiledMatchers<LogSignal>>,
+    /// Compiled matchers for metric policies.
+    compiled_metrics: Option<CompiledMatchers<MetricSignal>>,
 }
 
 impl PolicySnapshot {
@@ -159,7 +162,8 @@ impl PolicySnapshot {
             inner: Arc::new(SnapshotInner {
                 policies: Vec::new(),
                 index: HashMap::new(),
-                compiled: None,
+                compiled_logs: None,
+                compiled_metrics: None,
             }),
         }
     }
@@ -192,9 +196,14 @@ impl PolicySnapshot {
         self.inner.policies.iter()
     }
 
-    /// Get the compiled matchers for efficient evaluation.
-    pub fn compiled_matchers(&self) -> Option<&CompiledMatchers> {
-        self.inner.compiled.as_ref()
+    /// Get the compiled log matchers for efficient evaluation.
+    pub fn compiled_log_matchers(&self) -> Option<&CompiledMatchers<LogSignal>> {
+        self.inner.compiled_logs.as_ref()
+    }
+
+    /// Get the compiled metric matchers for efficient evaluation.
+    pub fn compiled_metric_matchers(&self) -> Option<&CompiledMatchers<MetricSignal>> {
+        self.inner.compiled_metrics.as_ref()
     }
 }
 
@@ -287,8 +296,9 @@ impl RegistryInner {
         let mut policies = Vec::new();
         let mut index = HashMap::new();
 
-        // Collect all policies with their stats for compilation
-        let mut policies_for_compile: Vec<(Policy, Arc<PolicyStats>)> = Vec::new();
+        // Collect all policies with their stats, partitioned by signal type
+        let mut log_policies: Vec<(Policy, Arc<PolicyStats>)> = Vec::new();
+        let mut metric_policies: Vec<(Policy, Arc<PolicyStats>)> = Vec::new();
 
         for (&provider_id, entries) in providers {
             for (policy, stats) in entries {
@@ -299,25 +309,47 @@ impl RegistryInner {
                     provider_id,
                     stats: Arc::clone(stats),
                 });
-                policies_for_compile.push((policy.clone(), Arc::clone(stats)));
+
+                if policy.log_target().is_some() {
+                    log_policies.push((policy.clone(), Arc::clone(stats)));
+                } else if policy.metric_target().is_some() {
+                    metric_policies.push((policy.clone(), Arc::clone(stats)));
+                }
             }
         }
 
-        // Compile matchers
-        let compiled = match CompiledMatchers::build(policies_for_compile.into_iter()) {
-            Ok(matchers) => Some(matchers),
-            Err(e) => {
-                // Log error but continue - fail open
-                eprintln!("Failed to compile policy matchers: {}", e);
-                None
+        // Compile log matchers
+        let compiled_logs = if !log_policies.is_empty() {
+            match CompiledMatchers::<LogSignal>::build(log_policies.into_iter()) {
+                Ok(matchers) => Some(matchers),
+                Err(e) => {
+                    eprintln!("Failed to compile log policy matchers: {}", e);
+                    None
+                }
             }
+        } else {
+            None
+        };
+
+        // Compile metric matchers
+        let compiled_metrics = if !metric_policies.is_empty() {
+            match CompiledMatchers::<MetricSignal>::build(metric_policies.into_iter()) {
+                Ok(matchers) => Some(matchers),
+                Err(e) => {
+                    eprintln!("Failed to compile metric policy matchers: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
         };
 
         let new_snapshot = PolicySnapshot {
             inner: Arc::new(SnapshotInner {
                 policies,
                 index,
-                compiled,
+                compiled_logs,
+                compiled_metrics,
             }),
         };
 

@@ -6,27 +6,28 @@ use crate::proto::tero::policy::v1::{
 };
 use crate::registry::PolicyStats;
 
+use super::signal::{LogSignal, Signal};
 use super::transformable::Transformable;
 
 /// A single transform operation.
 #[derive(Debug, Clone)]
-pub enum TransformOp {
+pub enum TransformOp<S: Signal> {
     /// Remove a field entirely.
-    Remove { field: LogFieldSelector },
+    Remove { field: S::FieldSelector },
     /// Redact a field by replacing its value.
     Redact {
-        field: LogFieldSelector,
+        field: S::FieldSelector,
         replacement: String,
     },
     /// Rename a field to a new attribute key.
     Rename {
-        from: LogFieldSelector,
+        from: S::FieldSelector,
         to: String,
         upsert: bool,
     },
     /// Add a new field with a value.
     Add {
-        field: LogFieldSelector,
+        field: S::FieldSelector,
         value: String,
         upsert: bool,
     },
@@ -35,13 +36,101 @@ pub enum TransformOp {
 /// Compiled transforms for a single policy.
 ///
 /// Operations are stored in execution order: remove, redact, rename, add.
-#[derive(Debug, Clone, Default)]
-pub struct CompiledTransform {
+#[derive(Debug, Clone)]
+pub struct CompiledTransform<S: Signal> {
     /// Operations to apply, in order.
-    pub ops: Vec<TransformOp>,
+    pub ops: Vec<TransformOp<S>>,
 }
 
-impl CompiledTransform {
+impl<S: Signal> Default for CompiledTransform<S> {
+    fn default() -> Self {
+        Self { ops: Vec::new() }
+    }
+}
+
+impl<S: Signal> CompiledTransform<S> {
+    /// Apply all operations to a transformable record.
+    ///
+    /// Returns the number of operations that were successfully applied.
+    pub fn apply<T: Transformable<Signal = S>>(&self, record: &mut T) -> usize {
+        self.apply_with_stats(record, None)
+    }
+
+    /// Apply all operations to a transformable record, recording stats.
+    ///
+    /// Returns the number of operations that were successfully applied.
+    pub fn apply_with_stats<T: Transformable<Signal = S>>(
+        &self,
+        record: &mut T,
+        stats: Option<&PolicyStats>,
+    ) -> usize {
+        let mut applied = 0;
+        for op in &self.ops {
+            let success = match op {
+                TransformOp::Remove { field } => {
+                    let result = record.remove_field(field);
+                    if let Some(s) = stats {
+                        if result {
+                            s.remove.record_hit();
+                        } else {
+                            s.remove.record_miss();
+                        }
+                    }
+                    result
+                }
+                TransformOp::Redact { field, replacement } => {
+                    let result = record.redact_field(field, replacement);
+                    if let Some(s) = stats {
+                        if result {
+                            s.redact.record_hit();
+                        } else {
+                            s.redact.record_miss();
+                        }
+                    }
+                    result
+                }
+                TransformOp::Rename { from, to, upsert } => {
+                    let result = record.rename_field(from, to, *upsert);
+                    if let Some(s) = stats {
+                        if result {
+                            s.rename.record_hit();
+                        } else {
+                            s.rename.record_miss();
+                        }
+                    }
+                    result
+                }
+                TransformOp::Add {
+                    field,
+                    value,
+                    upsert,
+                } => {
+                    let result = record.add_field(field, value, *upsert);
+                    if let Some(s) = stats {
+                        if result {
+                            s.add.record_hit();
+                        } else {
+                            s.add.record_miss();
+                        }
+                    }
+                    result
+                }
+            };
+            if success {
+                applied += 1;
+            }
+        }
+        applied
+    }
+
+    /// Check if this transform has any operations.
+    pub fn is_empty(&self) -> bool {
+        self.ops.is_empty()
+    }
+}
+
+/// Log-specific transform compilation from proto.
+impl CompiledTransform<LogSignal> {
     /// Build from proto LogTransform.
     pub fn from_proto(transform: &LogTransform) -> Self {
         let mut ops = Vec::new();
@@ -86,85 +175,6 @@ impl CompiledTransform {
         }
 
         Self { ops }
-    }
-
-    /// Apply all operations to a transformable log.
-    ///
-    /// Returns the number of operations that were successfully applied.
-    pub fn apply<T: Transformable>(&self, log: &mut T) -> usize {
-        self.apply_with_stats(log, None)
-    }
-
-    /// Apply all operations to a transformable log, recording stats.
-    ///
-    /// Returns the number of operations that were successfully applied.
-    pub fn apply_with_stats<T: Transformable>(
-        &self,
-        log: &mut T,
-        stats: Option<&PolicyStats>,
-    ) -> usize {
-        let mut applied = 0;
-        for op in &self.ops {
-            let success = match op {
-                TransformOp::Remove { field } => {
-                    let result = log.remove_field(field);
-                    if let Some(s) = stats {
-                        if result {
-                            s.remove.record_hit();
-                        } else {
-                            s.remove.record_miss();
-                        }
-                    }
-                    result
-                }
-                TransformOp::Redact { field, replacement } => {
-                    let result = log.redact_field(field, replacement);
-                    if let Some(s) = stats {
-                        if result {
-                            s.redact.record_hit();
-                        } else {
-                            s.redact.record_miss();
-                        }
-                    }
-                    result
-                }
-                TransformOp::Rename { from, to, upsert } => {
-                    let result = log.rename_field(from, to, *upsert);
-                    if let Some(s) = stats {
-                        if result {
-                            s.rename.record_hit();
-                        } else {
-                            s.rename.record_miss();
-                        }
-                    }
-                    result
-                }
-                TransformOp::Add {
-                    field,
-                    value,
-                    upsert,
-                } => {
-                    let result = log.add_field(field, value, *upsert);
-                    if let Some(s) = stats {
-                        if result {
-                            s.add.record_hit();
-                        } else {
-                            s.add.record_miss();
-                        }
-                    }
-                    result
-                }
-            };
-            if success {
-                applied += 1;
-            }
-        }
-        applied
-    }
-
-    /// Check if this transform has any operations.
-    pub fn is_empty(&self) -> bool {
-        self.ops.is_empty()
     }
 
     fn convert_remove_field(field: &Option<log_remove::Field>) -> Option<LogFieldSelector> {
@@ -247,6 +257,7 @@ impl CompiledTransform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::signal::LogSignal;
     use crate::proto::tero::policy::v1::{LogAdd, LogRedact, LogRemove, LogRename};
     use std::collections::HashMap;
 
@@ -274,16 +285,21 @@ mod tests {
         }
     }
 
+    impl crate::engine::matchable::Matchable for TestLog {
+        type Signal = LogSignal;
+        fn get_field(&self, _field: &LogFieldSelector) -> Option<std::borrow::Cow<'_, str>> {
+            None // Not used by transform tests
+        }
+    }
+
     impl Transformable for TestLog {
         fn remove_field(&mut self, field: &LogFieldSelector) -> bool {
             match field {
                 LogFieldSelector::Simple(LogField::Body) => self.body.take().is_some(),
-                LogFieldSelector::LogAttribute(path) => {
-                    // For tests, use first path segment as flat key
-                    path.first()
-                        .and_then(|key| self.attributes.remove(key))
-                        .is_some()
-                }
+                LogFieldSelector::LogAttribute(path) => path
+                    .first()
+                    .and_then(|key| self.attributes.remove(key))
+                    .is_some(),
                 _ => false,
             }
         }
@@ -359,7 +375,7 @@ mod tests {
     #[test]
     fn from_proto_empty() {
         let proto = LogTransform::default();
-        let compiled = CompiledTransform::from_proto(&proto);
+        let compiled = CompiledTransform::<LogSignal>::from_proto(&proto);
         assert!(compiled.is_empty());
     }
 
@@ -445,7 +461,6 @@ mod tests {
     #[test]
     fn from_proto_ordering() {
         use crate::proto::tero::policy::v1::AttributePath;
-        // Verify order: remove, redact, rename, add
         let proto = LogTransform {
             add: vec![LogAdd {
                 field: Some(log_add::Field::LogAttribute(AttributePath {
@@ -476,7 +491,6 @@ mod tests {
         let compiled = CompiledTransform::from_proto(&proto);
         assert_eq!(compiled.ops.len(), 4);
 
-        // Check order
         assert!(matches!(&compiled.ops[0], TransformOp::Remove { .. }));
         assert!(matches!(&compiled.ops[1], TransformOp::Redact { .. }));
         assert!(matches!(&compiled.ops[2], TransformOp::Rename { .. }));
@@ -490,7 +504,7 @@ mod tests {
             .with_attr("secret", "password123")
             .with_attr("old_name", "value");
 
-        let transform = CompiledTransform {
+        let transform = CompiledTransform::<LogSignal> {
             ops: vec![
                 TransformOp::Redact {
                     field: LogFieldSelector::LogAttribute(vec!["secret".to_string()]),
@@ -524,13 +538,11 @@ mod tests {
     fn apply_returns_count_of_successful_ops() {
         let mut log = TestLog::new().with_body("test");
 
-        let transform = CompiledTransform {
+        let transform = CompiledTransform::<LogSignal> {
             ops: vec![
-                // This will succeed
                 TransformOp::Remove {
                     field: LogFieldSelector::Simple(LogField::Body),
                 },
-                // This will fail (field doesn't exist)
                 TransformOp::Redact {
                     field: LogFieldSelector::LogAttribute(vec!["nonexistent".to_string()]),
                     replacement: "X".to_string(),

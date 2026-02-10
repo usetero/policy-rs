@@ -5,6 +5,7 @@ mod keep;
 mod match_key;
 mod matchable;
 mod rate_limiter;
+pub mod signal;
 mod transform;
 mod transformable;
 
@@ -13,6 +14,7 @@ pub use keep::CompiledKeep;
 pub use match_key::MatchKey;
 pub use matchable::Matchable;
 pub use rate_limiter::RateLimiters;
+pub use signal::{LogSignal, MetricSignal, Signal};
 pub use transform::{CompiledTransform, TransformOp};
 pub use transformable::Transformable;
 
@@ -69,23 +71,24 @@ impl PolicyEngine {
         }
     }
 
-    /// Evaluate a log record against the policies in a snapshot.
+    /// Evaluate a telemetry record against the policies in a snapshot.
     ///
-    /// This scans the log fields using the pre-compiled Hyperscan databases
-    /// in the snapshot and returns the appropriate action for the log.
+    /// This scans the record's fields using the pre-compiled Hyperscan databases
+    /// in the snapshot and returns the appropriate action. The signal type is
+    /// inferred from the `Matchable` implementation's associated `Signal` type.
     ///
     /// # Arguments
     /// * `snapshot` - The policy snapshot to evaluate against
-    /// * `log` - The log record to evaluate
+    /// * `log` - The telemetry record to evaluate
     ///
     /// # Returns
-    /// The evaluation result indicating what should happen to the log.
+    /// The evaluation result indicating what should happen to the record.
     pub async fn evaluate<T: Matchable>(
         &self,
         snapshot: &PolicySnapshot,
         log: &T,
     ) -> Result<EvaluateResult, PolicyError> {
-        let Some(compiled) = snapshot.compiled_matchers() else {
+        let Some(compiled) = T::Signal::compiled_matchers(snapshot) else {
             return Ok(EvaluateResult::NoMatch);
         };
 
@@ -184,15 +187,15 @@ impl PolicyEngine {
         Ok(self.apply_keep(&winner.id, &winner.keep, false, sample_key_value.as_deref()))
     }
 
-    /// Evaluate a log record and apply transforms from all matching policies.
+    /// Evaluate a telemetry record and apply transforms from all matching policies.
     ///
-    /// This is similar to `evaluate`, but also applies transforms to the log
-    /// when the log is kept (not dropped). Transforms are applied from ALL
+    /// This is similar to `evaluate`, but also applies transforms to the record
+    /// when it is kept (not dropped). Transforms are applied from ALL
     /// matching policies, not just the winning policy.
     ///
     /// # Arguments
     /// * `snapshot` - The policy snapshot to evaluate against
-    /// * `log` - The log record to evaluate and potentially transform
+    /// * `log` - The telemetry record to evaluate and potentially transform
     ///
     /// # Returns
     /// The evaluation result with the `transformed` flag set if transforms were applied.
@@ -201,7 +204,7 @@ impl PolicyEngine {
         snapshot: &PolicySnapshot,
         log: &mut T,
     ) -> Result<EvaluateResult, PolicyError> {
-        let Some(compiled) = snapshot.compiled_matchers() else {
+        let Some(compiled) = T::Signal::compiled_matchers(snapshot) else {
             return Ok(EvaluateResult::NoMatch);
         };
 
@@ -439,6 +442,7 @@ fn should_keep_percentage(percentage: f64, sample_key_value: Option<&str>) -> bo
 mod tests {
     use super::*;
     use crate::Policy;
+    use crate::engine::signal::LogSignal;
     use crate::field::LogFieldSelector;
     use crate::proto::tero::policy::v1::Policy as ProtoPolicy;
     use crate::proto::tero::policy::v1::{
@@ -491,6 +495,8 @@ mod tests {
     }
 
     impl Matchable for TestLog {
+        type Signal = LogSignal;
+
         fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
             match field {
                 LogFieldSelector::Simple(log_field) => match log_field {
@@ -2113,5 +2119,640 @@ mod tests {
         // Just verify it doesn't panic and returns a valid result
         let result = engine.evaluate(&snapshot, &log).await.unwrap();
         assert!(matches!(result, EvaluateResult::Sample { .. }));
+    }
+
+    // ==================== Metric-specific tests ====================
+
+    use crate::engine::signal::MetricSignal;
+    use crate::field::MetricFieldSelector;
+    use crate::proto::tero::policy::v1::{
+        AggregationTemporality, MetricField, MetricMatcher, MetricTarget, MetricType,
+        metric_matcher,
+    };
+
+    /// Test metric record implementation.
+    struct TestMetric {
+        name: Option<String>,
+        description: Option<String>,
+        unit: Option<String>,
+        metric_type: Option<MetricType>,
+        aggregation_temporality: Option<AggregationTemporality>,
+        datapoint_attributes: HashMap<String, String>,
+        resource_attributes: HashMap<String, String>,
+        scope_name: Option<String>,
+    }
+
+    impl TestMetric {
+        fn new() -> Self {
+            Self {
+                name: None,
+                description: None,
+                unit: None,
+                metric_type: None,
+                aggregation_temporality: None,
+                datapoint_attributes: HashMap::new(),
+                resource_attributes: HashMap::new(),
+                scope_name: None,
+            }
+        }
+
+        fn with_name(mut self, name: &str) -> Self {
+            self.name = Some(name.to_string());
+            self
+        }
+
+        fn with_description(mut self, desc: &str) -> Self {
+            self.description = Some(desc.to_string());
+            self
+        }
+
+        fn with_unit(mut self, unit: &str) -> Self {
+            self.unit = Some(unit.to_string());
+            self
+        }
+
+        fn with_type(mut self, t: MetricType) -> Self {
+            self.metric_type = Some(t);
+            self
+        }
+
+        fn with_temporality(mut self, t: AggregationTemporality) -> Self {
+            self.aggregation_temporality = Some(t);
+            self
+        }
+
+        fn with_datapoint_attr(mut self, key: &str, value: &str) -> Self {
+            self.datapoint_attributes
+                .insert(key.to_string(), value.to_string());
+            self
+        }
+
+        fn with_resource_attr(mut self, key: &str, value: &str) -> Self {
+            self.resource_attributes
+                .insert(key.to_string(), value.to_string());
+            self
+        }
+
+        fn with_scope_name(mut self, name: &str) -> Self {
+            self.scope_name = Some(name.to_string());
+            self
+        }
+    }
+
+    impl Matchable for TestMetric {
+        type Signal = MetricSignal;
+
+        fn get_field(&self, field: &MetricFieldSelector) -> Option<Cow<'_, str>> {
+            match field {
+                MetricFieldSelector::Simple(metric_field) => match metric_field {
+                    MetricField::Name => self.name.as_deref().map(Cow::Borrowed),
+                    MetricField::Description => self.description.as_deref().map(Cow::Borrowed),
+                    MetricField::Unit => self.unit.as_deref().map(Cow::Borrowed),
+                    MetricField::ScopeName => self.scope_name.as_deref().map(Cow::Borrowed),
+                    _ => None,
+                },
+                MetricFieldSelector::DatapointAttribute(path) => path
+                    .first()
+                    .and_then(|key| self.datapoint_attributes.get(key))
+                    .map(|s| Cow::Borrowed(s.as_str())),
+                MetricFieldSelector::ResourceAttribute(path) => path
+                    .first()
+                    .and_then(|key| self.resource_attributes.get(key))
+                    .map(|s| Cow::Borrowed(s.as_str())),
+                MetricFieldSelector::ScopeAttribute(_) => None,
+                MetricFieldSelector::Type => self
+                    .metric_type
+                    .as_ref()
+                    .map(|t| Cow::Borrowed(t.as_str_name())),
+                MetricFieldSelector::Temporality => self
+                    .aggregation_temporality
+                    .as_ref()
+                    .map(|t| Cow::Borrowed(t.as_str_name())),
+            }
+        }
+    }
+
+    fn make_metric_policy(
+        id: &str,
+        matchers: Vec<MetricMatcher>,
+        keep: bool,
+        enabled: bool,
+    ) -> Policy {
+        let metric_target = MetricTarget {
+            r#match: matchers,
+            keep,
+        };
+
+        let proto = ProtoPolicy {
+            id: id.to_string(),
+            name: id.to_string(),
+            enabled,
+            target: Some(crate::proto::tero::policy::v1::policy::Target::Metric(
+                metric_target,
+            )),
+            ..Default::default()
+        };
+
+        Policy::new(proto)
+    }
+
+    fn metric_name_regex_matcher(pattern: &str, negate: bool) -> MetricMatcher {
+        MetricMatcher {
+            field: Some(metric_matcher::Field::MetricField(MetricField::Name.into())),
+            r#match: Some(metric_matcher::Match::Regex(pattern.to_string())),
+            negate,
+            case_insensitive: false,
+        }
+    }
+
+    fn metric_name_exact_matcher(value: &str, negate: bool) -> MetricMatcher {
+        MetricMatcher {
+            field: Some(metric_matcher::Field::MetricField(MetricField::Name.into())),
+            r#match: Some(metric_matcher::Match::Exact(value.to_string())),
+            negate,
+            case_insensitive: false,
+        }
+    }
+
+    fn metric_datapoint_attr_regex_matcher(
+        key: &str,
+        pattern: &str,
+        negate: bool,
+    ) -> MetricMatcher {
+        MetricMatcher {
+            field: Some(metric_matcher::Field::DatapointAttribute(attr_path(key))),
+            r#match: Some(metric_matcher::Match::Regex(pattern.to_string())),
+            negate,
+            case_insensitive: false,
+        }
+    }
+
+    fn metric_type_matcher(t: MetricType) -> MetricMatcher {
+        MetricMatcher {
+            field: Some(metric_matcher::Field::MetricType(t.into())),
+            r#match: None, // Synthesized by extract_metric_field
+            negate: false,
+            case_insensitive: false,
+        }
+    }
+
+    fn metric_temporality_matcher(t: AggregationTemporality) -> MetricMatcher {
+        MetricMatcher {
+            field: Some(metric_matcher::Field::AggregationTemporality(t.into())),
+            r#match: None,
+            negate: false,
+            case_insensitive: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_no_policies_returns_no_match() {
+        let registry = PolicyRegistry::new();
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let metric = TestMetric::new().with_name("cpu.usage");
+
+        let result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        assert_eq!(result, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_keep_true() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_metric_policy(
+            "keep-cpu",
+            vec![metric_name_regex_matcher("cpu", false)],
+            true,
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let metric = TestMetric::new().with_name("cpu.usage");
+
+        let result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        assert_eq!(
+            result,
+            EvaluateResult::Keep {
+                policy_id: "keep-cpu".to_string(),
+                transformed: false,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_keep_false_drops() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_metric_policy(
+            "drop-cpu",
+            vec![metric_name_regex_matcher("cpu", false)],
+            false,
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let metric = TestMetric::new().with_name("cpu.usage");
+
+        let result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        assert_eq!(
+            result,
+            EvaluateResult::Drop {
+                policy_id: "drop-cpu".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_no_match_returns_no_match() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_metric_policy(
+            "drop-cpu",
+            vec![metric_name_regex_matcher("cpu", false)],
+            false,
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let metric = TestMetric::new().with_name("memory.usage");
+
+        let result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        assert_eq!(result, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_exact_name_match() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_metric_policy(
+            "exact-cpu",
+            vec![metric_name_exact_matcher("cpu.usage", false)],
+            false,
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Exact match
+        let metric1 = TestMetric::new().with_name("cpu.usage");
+        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        assert_eq!(
+            result1,
+            EvaluateResult::Drop {
+                policy_id: "exact-cpu".to_string(),
+            }
+        );
+
+        // Not exact — should not match
+        let metric2 = TestMetric::new().with_name("cpu.usage.total");
+        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_datapoint_attribute() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_metric_policy(
+            "drop-by-attr",
+            vec![metric_datapoint_attr_regex_matcher(
+                "host", "prod-.*", false,
+            )],
+            false,
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let metric1 = TestMetric::new()
+            .with_name("cpu.usage")
+            .with_datapoint_attr("host", "prod-web-1");
+        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        assert_eq!(
+            result1,
+            EvaluateResult::Drop {
+                policy_id: "drop-by-attr".to_string(),
+            }
+        );
+
+        let metric2 = TestMetric::new()
+            .with_name("cpu.usage")
+            .with_datapoint_attr("host", "dev-web-1");
+        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_resource_attribute() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_metric_policy(
+            "drop-by-service",
+            vec![MetricMatcher {
+                field: Some(metric_matcher::Field::ResourceAttribute(attr_path(
+                    "service.name",
+                ))),
+                r#match: Some(metric_matcher::Match::Exact("my-service".to_string())),
+                negate: false,
+                case_insensitive: false,
+            }],
+            false,
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let metric = TestMetric::new()
+            .with_name("cpu.usage")
+            .with_resource_attr("service.name", "my-service");
+        let result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        assert_eq!(
+            result,
+            EvaluateResult::Drop {
+                policy_id: "drop-by-service".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_metric_type_matcher() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_metric_policy(
+            "drop-gauges",
+            vec![metric_type_matcher(MetricType::Gauge)],
+            false,
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Gauge metric — should match
+        let metric1 = TestMetric::new()
+            .with_name("cpu.usage")
+            .with_type(MetricType::Gauge);
+        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        assert_eq!(
+            result1,
+            EvaluateResult::Drop {
+                policy_id: "drop-gauges".to_string(),
+            }
+        );
+
+        // Sum metric — should not match
+        let metric2 = TestMetric::new()
+            .with_name("requests.total")
+            .with_type(MetricType::Sum);
+        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_aggregation_temporality_matcher() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_metric_policy(
+            "drop-delta",
+            vec![metric_temporality_matcher(AggregationTemporality::Delta)],
+            false,
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Delta metric — should match
+        let metric1 = TestMetric::new()
+            .with_name("requests.total")
+            .with_temporality(AggregationTemporality::Delta);
+        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        assert_eq!(
+            result1,
+            EvaluateResult::Drop {
+                policy_id: "drop-delta".to_string(),
+            }
+        );
+
+        // Cumulative metric — should not match
+        let metric2 = TestMetric::new()
+            .with_name("requests.total")
+            .with_temporality(AggregationTemporality::Cumulative);
+        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_multiple_matchers_all_must_match() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_metric_policy(
+            "drop-gauge-cpu",
+            vec![
+                metric_name_regex_matcher("cpu", false),
+                metric_type_matcher(MetricType::Gauge),
+            ],
+            false,
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Both match
+        let metric1 = TestMetric::new()
+            .with_name("cpu.usage")
+            .with_type(MetricType::Gauge);
+        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        assert_eq!(
+            result1,
+            EvaluateResult::Drop {
+                policy_id: "drop-gauge-cpu".to_string(),
+            }
+        );
+
+        // Only name matches
+        let metric2 = TestMetric::new()
+            .with_name("cpu.usage")
+            .with_type(MetricType::Sum);
+        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+
+        // Only type matches
+        let metric3 = TestMetric::new()
+            .with_name("memory.usage")
+            .with_type(MetricType::Gauge);
+        let result3 = engine.evaluate(&snapshot, &metric3).await.unwrap();
+        assert_eq!(result3, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_most_restrictive_wins() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy_keep = make_metric_policy(
+            "keep-cpu",
+            vec![metric_name_regex_matcher("cpu", false)],
+            true,
+            true,
+        );
+        let policy_drop = make_metric_policy(
+            "drop-cpu",
+            vec![metric_name_regex_matcher("cpu", false)],
+            false,
+            true,
+        );
+        handle.update(vec![policy_keep, policy_drop]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let metric = TestMetric::new().with_name("cpu.usage");
+
+        let result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        assert_eq!(
+            result,
+            EvaluateResult::Drop {
+                policy_id: "drop-cpu".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_disabled_policy_skipped() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_metric_policy(
+            "disabled-metric",
+            vec![metric_name_regex_matcher("cpu", false)],
+            false,
+            false, // disabled
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let metric = TestMetric::new().with_name("cpu.usage");
+
+        let result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        assert_eq!(result, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn mixed_log_and_metric_policies_signal_isolation() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        // A log policy and a metric policy — each should only match its own signal
+        let log_policy = make_policy(
+            "drop-log-errors",
+            vec![body_regex_matcher("error", false)],
+            "none",
+            true,
+        );
+        let metric_policy = make_metric_policy(
+            "drop-cpu-metrics",
+            vec![metric_name_regex_matcher("cpu", false)],
+            false,
+            true,
+        );
+        handle.update(vec![log_policy, metric_policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Log with "error" — should match log policy
+        let log = TestLog::new().with_body("error occurred");
+        let log_result = engine.evaluate(&snapshot, &log).await.unwrap();
+        assert_eq!(
+            log_result,
+            EvaluateResult::Drop {
+                policy_id: "drop-log-errors".to_string(),
+            }
+        );
+
+        // Metric with "cpu" — should match metric policy
+        let metric = TestMetric::new().with_name("cpu.usage");
+        let metric_result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        assert_eq!(
+            metric_result,
+            EvaluateResult::Drop {
+                policy_id: "drop-cpu-metrics".to_string(),
+            }
+        );
+
+        // Log without "error" — no match
+        let log2 = TestLog::new().with_body("info message");
+        let log_result2 = engine.evaluate(&snapshot, &log2).await.unwrap();
+        assert_eq!(log_result2, EvaluateResult::NoMatch);
+
+        // Metric without "cpu" — no match
+        let metric2 = TestMetric::new().with_name("memory.usage");
+        let metric_result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        assert_eq!(metric_result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_negated_matcher() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        // Drop metrics named "cpu" unless they have a "debug" datapoint attribute
+        let policy = make_metric_policy(
+            "drop-cpu-no-debug",
+            vec![
+                metric_name_regex_matcher("cpu", false),
+                metric_datapoint_attr_regex_matcher("debug", "true", true), // negated
+            ],
+            false,
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // CPU metric without debug — should match (drop)
+        let metric1 = TestMetric::new().with_name("cpu.usage");
+        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        assert_eq!(
+            result1,
+            EvaluateResult::Drop {
+                policy_id: "drop-cpu-no-debug".to_string(),
+            }
+        );
+
+        // CPU metric with debug=true — negated matcher disqualifies
+        let metric2 = TestMetric::new()
+            .with_name("cpu.usage")
+            .with_datapoint_attr("debug", "true");
+        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
     }
 }
