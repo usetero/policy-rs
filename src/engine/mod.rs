@@ -414,28 +414,55 @@ impl Default for PolicyEngine {
     }
 }
 
-/// Hash a sample key value to produce a deterministic value in [0, 1).
+/// Maximum threshold value: 2^56.
+const MAX_THRESHOLD: u64 = 1 << 56;
+
+/// Mask for extracting 56-bit randomness from a 64-bit hash.
+const RANDOMNESS_MASK: u64 = MAX_THRESHOLD - 1;
+
+/// Hash a sample key value to produce a deterministic 56-bit randomness value.
 ///
-/// Uses the standard library's DefaultHasher for fast, consistent hashing.
-/// The same key value will always produce the same hash, enabling consistent
-/// sampling decisions across multiple log records with the same key.
-fn hash_sample_key(value: &str) -> f64 {
+/// Uses consistent probability sampling per the OpenTelemetry specification.
+/// The same key value always produces the same 56-bit randomness value,
+/// enabling consistent sampling decisions across multiple records with the
+/// same key. Higher sampling probabilities are strict supersets of lower ones:
+/// if a record is kept at 10%, it will also be kept at 50%.
+fn hash_sample_key(value: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     value.hash(&mut hasher);
-    let hash = hasher.finish();
-    // Convert to a value in [0, 1)
-    (hash as f64) / (u64::MAX as f64)
+    hasher.finish() & RANDOMNESS_MASK
 }
 
-/// Determine if a log should be kept based on percentage sampling.
+/// Convert a sampling probability (0.0–1.0) to a 56-bit rejection threshold.
+///
+/// The threshold T = (1 - probability) * 2^56. A record is kept when its
+/// randomness value R >= T. This means T=0 keeps everything (100%) and
+/// T=2^56 keeps nothing (0%).
+fn rejection_threshold(probability: f64) -> u64 {
+    if probability >= 1.0 {
+        return 0;
+    }
+    if probability <= 0.0 {
+        return MAX_THRESHOLD;
+    }
+    ((1.0 - probability) * MAX_THRESHOLD as f64) as u64
+}
+
+/// Determine if a record should be kept based on percentage sampling.
+///
+/// Uses consistent probability sampling per the OpenTelemetry specification:
+/// computes a 56-bit rejection threshold from the probability and compares
+/// against a 56-bit randomness value derived from the sample key hash.
 ///
 /// If a sample key value is provided, uses hash-based consistent sampling.
-/// Otherwise, uses random sampling.
+/// Otherwise, uses random sampling with a 56-bit random value.
 fn should_keep_percentage(percentage: f64, sample_key_value: Option<&str>) -> bool {
-    match sample_key_value {
-        Some(key) => hash_sample_key(key) < percentage,
-        None => rand::random::<f64>() < percentage,
-    }
+    let threshold = rejection_threshold(percentage);
+    let randomness = match sample_key_value {
+        Some(key) => hash_sample_key(key),
+        None => rand::random::<u64>() & RANDOMNESS_MASK,
+    };
+    randomness >= threshold
 }
 
 #[cfg(test)]
@@ -1918,8 +1945,7 @@ mod tests {
     }
 
     #[test]
-    fn hash_sample_key_produces_valid_range() {
-        // Test that hash values are in [0, 1)
+    fn hash_sample_key_produces_56_bit_values() {
         let test_keys = [
             "request-1",
             "request-2",
@@ -1932,9 +1958,33 @@ mod tests {
 
         for key in test_keys {
             let hash = hash_sample_key(key);
-            assert!(hash >= 0.0, "Hash for '{}' should be >= 0", key);
-            assert!(hash < 1.0, "Hash for '{}' should be < 1", key);
+            assert!(
+                hash < MAX_THRESHOLD,
+                "Hash for '{}' should be < 2^56, got {}",
+                key,
+                hash
+            );
         }
+    }
+
+    #[test]
+    fn rejection_threshold_edge_cases() {
+        // 100% probability → threshold 0 (keep everything)
+        assert_eq!(rejection_threshold(1.0), 0);
+
+        // 0% probability → threshold 2^56 (keep nothing)
+        assert_eq!(rejection_threshold(0.0), MAX_THRESHOLD);
+
+        // 50% probability → threshold ~2^55
+        let t50 = rejection_threshold(0.5);
+        let expected = MAX_THRESHOLD / 2;
+        assert_eq!(t50, expected);
+
+        // Over 100% clamped to 0
+        assert_eq!(rejection_threshold(1.5), 0);
+
+        // Below 0% clamped to MAX_THRESHOLD
+        assert_eq!(rejection_threshold(-0.1), MAX_THRESHOLD);
     }
 
     #[test]
@@ -1998,6 +2048,31 @@ mod tests {
         // We can't test randomness directly, but we can verify it works
         // Just verify it returns without panicking
         let _decision = should_keep_percentage(0.5, None);
+    }
+
+    #[test]
+    fn consistent_sampling_superset_property() {
+        // Core property of consistent probability sampling:
+        // if a key is kept at probability P, it must also be kept at any P' > P.
+        let keys: Vec<String> = (0..500).map(|i| format!("key-{}", i)).collect();
+        let probabilities = [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99];
+
+        for key in &keys {
+            let mut was_kept = false;
+            for &p in &probabilities {
+                let kept = should_keep_percentage(p, Some(key));
+                if was_kept {
+                    assert!(
+                        kept,
+                        "Key '{}' was kept at lower probability but dropped at {}",
+                        key, p
+                    );
+                }
+                if kept {
+                    was_kept = true;
+                }
+            }
+        }
     }
 
     #[tokio::test]
