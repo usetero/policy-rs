@@ -7,7 +7,7 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use crate::field::{LogFieldSelector, MetricFieldSelector};
+use crate::field::{LogFieldSelector, MetricFieldSelector, TraceFieldSelector};
 use crate::registry::PolicySnapshot;
 
 use super::compiled::CompiledMatchers;
@@ -47,5 +47,17 @@ impl Signal for MetricSignal {
 
     fn compiled_matchers(snapshot: &PolicySnapshot) -> Option<&CompiledMatchers<Self>> {
         snapshot.compiled_metric_matchers()
+    }
+}
+
+/// Trace telemetry signal.
+#[derive(Debug)]
+pub struct TraceSignal;
+
+impl Signal for TraceSignal {
+    type FieldSelector = TraceFieldSelector;
+
+    fn compiled_matchers(snapshot: &PolicySnapshot) -> Option<&CompiledMatchers<Self>> {
+        snapshot.compiled_trace_matchers()
     }
 }

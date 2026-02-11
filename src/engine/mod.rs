@@ -9,12 +9,14 @@ pub mod signal;
 mod transform;
 mod transformable;
 
-pub use compiled::{CompiledDatabase, CompiledMatchers, CompiledPolicy, ExistenceCheck};
+pub use compiled::{
+    CompiledDatabase, CompiledMatchers, CompiledPolicy, CompiledTraceSampling, ExistenceCheck,
+};
 pub use keep::CompiledKeep;
 pub use match_key::MatchKey;
 pub use matchable::Matchable;
 pub use rate_limiter::RateLimiters;
-pub use signal::{LogSignal, MetricSignal, Signal};
+pub use signal::{LogSignal, MetricSignal, Signal, TraceSignal};
 pub use transform::{CompiledTransform, TransformOp};
 pub use transformable::Transformable;
 
@@ -22,6 +24,8 @@ use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 use crate::error::PolicyError;
+use crate::field::TraceFieldSelector;
+use crate::proto::tero::policy::v1::TraceField;
 use crate::registry::PolicySnapshot;
 
 /// Result of evaluating a log record against policies.
@@ -92,89 +96,9 @@ impl PolicyEngine {
             return Ok(EvaluateResult::NoMatch);
         };
 
-        let policy_count = compiled.policies.len();
-        if policy_count == 0 {
+        let Some(matching) = find_matching_policies(compiled, log)? else {
             return Ok(EvaluateResult::NoMatch);
-        }
-
-        // Track match counts and disqualified policies
-        let mut match_counts: Vec<usize> = vec![0; policy_count];
-        let mut disqualified: Vec<bool> = vec![false; policy_count];
-
-        // Scan each Vectorscan database
-        for (key, db) in &compiled.databases {
-            // Get field value from log
-            let Some(value) = log.get_field(&key.field) else {
-                // Field missing - positive matchers don't match, nothing to do
-                continue;
-            };
-
-            // Scan for matches
-            let matches = db.database.scan(value.as_bytes())?;
-
-            for pattern_id in matches {
-                if let Some(pattern_ref) = db.pattern_index.get(pattern_id as usize) {
-                    if key.negated {
-                        // Negated matcher matched = policy is disqualified
-                        disqualified[pattern_ref.policy_index] = true;
-                    } else {
-                        // Positive match
-                        match_counts[pattern_ref.policy_index] += 1;
-                    }
-                }
-            }
-        }
-
-        // Handle existence checks
-        for check in &compiled.existence_checks {
-            if disqualified[check.policy_index] {
-                continue;
-            }
-
-            let exists = log.get_field(&check.field).is_some();
-            let matches = exists == check.should_exist;
-
-            if check.is_negated {
-                // Negated existence check: disqualify if the condition IS met
-                // (e.g., "NOT exists:true" disqualifies if field exists)
-                if matches {
-                    disqualified[check.policy_index] = true;
-                }
-                // Don't increment match_counts for negated checks - they only disqualify
-            } else if matches {
-                match_counts[check.policy_index] += 1;
-            }
-        }
-
-        // Find matching policies
-        let mut matching: Vec<usize> = Vec::new();
-        for (idx, policy) in compiled.policies.iter().enumerate() {
-            if !policy.enabled {
-                continue;
-            }
-            if disqualified[idx] {
-                policy.stats.record_miss();
-                continue;
-            }
-            if match_counts[idx] == policy.required_match_count {
-                policy.stats.record_hit();
-                matching.push(idx);
-            } else {
-                policy.stats.record_miss();
-            }
-        }
-
-        if matching.is_empty() {
-            return Ok(EvaluateResult::NoMatch);
-        }
-
-        // Select most restrictive policy
-        matching.sort_by(|a, b| {
-            compiled.policies[*b]
-                .keep
-                .restrictiveness()
-                .cmp(&compiled.policies[*a].keep.restrictiveness())
-        });
+        };
 
         let winner = &compiled.policies[matching[0]];
 
@@ -208,86 +132,11 @@ impl PolicyEngine {
             return Ok(EvaluateResult::NoMatch);
         };
 
-        let policy_count = compiled.policies.len();
-        if policy_count == 0 {
+        let Some(matching) = find_matching_policies(compiled, log)? else {
             return Ok(EvaluateResult::NoMatch);
-        }
+        };
 
-        // Track match counts and disqualified policies
-        let mut match_counts: Vec<usize> = vec![0; policy_count];
-        let mut disqualified: Vec<bool> = vec![false; policy_count];
-
-        // Scan each Vectorscan database
-        for (key, db) in &compiled.databases {
-            // Get field value from log
-            let Some(value) = log.get_field(&key.field) else {
-                continue;
-            };
-
-            // Scan for matches
-            let matches = db.database.scan(value.as_bytes())?;
-
-            for pattern_id in matches {
-                if let Some(pattern_ref) = db.pattern_index.get(pattern_id as usize) {
-                    if key.negated {
-                        disqualified[pattern_ref.policy_index] = true;
-                    } else {
-                        match_counts[pattern_ref.policy_index] += 1;
-                    }
-                }
-            }
-        }
-
-        // Handle existence checks
-        for check in &compiled.existence_checks {
-            if disqualified[check.policy_index] {
-                continue;
-            }
-
-            let exists = log.get_field(&check.field).is_some();
-            let matches = exists == check.should_exist;
-
-            if check.is_negated {
-                if matches {
-                    disqualified[check.policy_index] = true;
-                }
-            } else if matches {
-                match_counts[check.policy_index] += 1;
-            }
-        }
-
-        // Find matching policies
-        let mut matching: Vec<usize> = Vec::new();
-        for (idx, policy) in compiled.policies.iter().enumerate() {
-            if !policy.enabled {
-                continue;
-            }
-            if disqualified[idx] {
-                policy.stats.record_miss();
-                continue;
-            }
-            if match_counts[idx] == policy.required_match_count {
-                policy.stats.record_hit();
-                matching.push(idx);
-            } else {
-                policy.stats.record_miss();
-            }
-        }
-
-        if matching.is_empty() {
-            return Ok(EvaluateResult::NoMatch);
-        }
-
-        // Select most restrictive policy
-        matching.sort_by(|a, b| {
-            compiled.policies[*b]
-                .keep
-                .restrictiveness()
-                .cmp(&compiled.policies[*a].keep.restrictiveness())
-        });
-
-        let winner_idx = matching[0];
-        let winner = &compiled.policies[winner_idx];
+        let winner = &compiled.policies[matching[0]];
 
         // Extract sample key value if configured (for consistent sampling)
         let sample_key_value = winner
@@ -406,12 +255,199 @@ impl PolicyEngine {
             }
         }
     }
+
+    /// Evaluate a trace span against policies, applying consistent probability sampling.
+    ///
+    /// This method handles the full OTel consistent probability sampling flow:
+    /// 1. Standard matching (same as `evaluate`)
+    /// 2. Extract 56-bit randomness from tracestate `rv` sub-key or TraceID
+    /// 3. Compare randomness against the winning policy's rejection threshold
+    /// 4. If sampled, write the `th` value back to the span via `Transformable::add_field`
+    ///
+    /// The `th` value is written to `TraceFieldSelector::SamplingThreshold`, which the
+    /// user's `Transformable` implementation should handle by updating the tracestate.
+    pub async fn evaluate_trace<T: Matchable<Signal = TraceSignal> + Transformable>(
+        &self,
+        snapshot: &PolicySnapshot,
+        span: &mut T,
+    ) -> Result<EvaluateResult, PolicyError> {
+        let Some(compiled) = TraceSignal::compiled_matchers(snapshot) else {
+            return Ok(EvaluateResult::NoMatch);
+        };
+
+        let Some(matching) = find_matching_policies(compiled, span)? else {
+            return Ok(EvaluateResult::NoMatch);
+        };
+
+        let winner = &compiled.policies[matching[0]];
+
+        // For trace policies, use consistent probability sampling with tracestate
+        let trace_sampling = match &winner.trace_sampling {
+            Some(ts) => ts,
+            None => {
+                // No sampling config — treat as keep all
+                return Ok(EvaluateResult::Keep {
+                    policy_id: winner.id.clone(),
+                    transformed: false,
+                });
+            }
+        };
+
+        // Short-circuit for 100% and 0%
+        match &winner.keep {
+            CompiledKeep::None => {
+                return Ok(EvaluateResult::Drop {
+                    policy_id: winner.id.clone(),
+                });
+            }
+            CompiledKeep::All => {
+                // 100% sampling — write th=0 and keep
+                span.add_field(
+                    &TraceFieldSelector::SamplingThreshold,
+                    &encode_threshold(0, trace_sampling.precision),
+                    true,
+                );
+                return Ok(EvaluateResult::Keep {
+                    policy_id: winner.id.clone(),
+                    transformed: true,
+                });
+            }
+            _ => {}
+        }
+
+        // Extract randomness for sampling decision
+        let randomness = extract_trace_randomness(span);
+
+        match randomness {
+            Some(r) => {
+                let keep = r >= trace_sampling.threshold;
+
+                if keep {
+                    // Write th value to span for downstream propagation
+                    span.add_field(
+                        &TraceFieldSelector::SamplingThreshold,
+                        &encode_threshold(trace_sampling.threshold, trace_sampling.precision),
+                        true,
+                    );
+                }
+
+                Ok(EvaluateResult::Sample {
+                    policy_id: winner.id.clone(),
+                    percentage: trace_sampling.probability * 100.0,
+                    keep,
+                    transformed: keep,
+                })
+            }
+            None => {
+                // No randomness available — respect fail_closed setting
+                if trace_sampling.fail_closed {
+                    Ok(EvaluateResult::Drop {
+                        policy_id: winner.id.clone(),
+                    })
+                } else {
+                    // Fail open — keep without writing th
+                    Ok(EvaluateResult::Keep {
+                        policy_id: winner.id.clone(),
+                        transformed: false,
+                    })
+                }
+            }
+        }
+    }
 }
 
 impl Default for PolicyEngine {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Find matching policies by scanning Vectorscan databases and checking existence.
+///
+/// Returns the matching policy indices sorted by restrictiveness (most restrictive first),
+/// or `None` if no policies match. Also records hit/miss stats on each policy.
+/// NOTE: Later we will need to iterate over all the policies for transforms on keep decisions.
+fn find_matching_policies<S: Signal>(
+    compiled: &CompiledMatchers<S>,
+    record: &impl Matchable<Signal = S>,
+) -> Result<Option<Vec<usize>>, PolicyError> {
+    let policy_count = compiled.policies.len();
+    if policy_count == 0 {
+        return Ok(None);
+    }
+
+    // Track match counts and disqualified policies
+    let mut match_counts: Vec<usize> = vec![0; policy_count];
+    let mut disqualified: Vec<bool> = vec![false; policy_count];
+
+    // Scan each Vectorscan database
+    for (key, db) in &compiled.databases {
+        let Some(value) = record.get_field(&key.field) else {
+            continue;
+        };
+
+        let matches = db.database.scan(value.as_bytes())?;
+
+        for pattern_id in matches {
+            if let Some(pattern_ref) = db.pattern_index.get(pattern_id as usize) {
+                if key.negated {
+                    disqualified[pattern_ref.policy_index] = true;
+                } else {
+                    match_counts[pattern_ref.policy_index] += 1;
+                }
+            }
+        }
+    }
+
+    // Handle existence checks
+    for check in &compiled.existence_checks {
+        if disqualified[check.policy_index] {
+            continue;
+        }
+
+        let exists = record.get_field(&check.field).is_some();
+        let field_matches = exists == check.should_exist;
+
+        if check.is_negated {
+            if field_matches {
+                disqualified[check.policy_index] = true;
+            }
+        } else if field_matches {
+            match_counts[check.policy_index] += 1;
+        }
+    }
+
+    // Find matching policies
+    let mut matching: Vec<usize> = Vec::new();
+    for (idx, policy) in compiled.policies.iter().enumerate() {
+        if !policy.enabled {
+            continue;
+        }
+        if disqualified[idx] {
+            policy.stats.record_miss();
+            continue;
+        }
+        if match_counts[idx] == policy.required_match_count {
+            policy.stats.record_hit();
+            matching.push(idx);
+        } else {
+            policy.stats.record_miss();
+        }
+    }
+
+    if matching.is_empty() {
+        return Ok(None);
+    }
+
+    // Sort by restrictiveness (most restrictive first)
+    matching.sort_by(|a, b| {
+        compiled.policies[*b]
+            .keep
+            .restrictiveness()
+            .cmp(&compiled.policies[*a].keep.restrictiveness())
+    });
+
+    Ok(Some(matching))
 }
 
 /// Maximum threshold value: 2^56.
@@ -463,6 +499,78 @@ fn should_keep_percentage(percentage: f64, sample_key_value: Option<&str>) -> bo
         None => rand::random::<u64>() & RANDOMNESS_MASK,
     };
     randomness >= threshold
+}
+
+/// Encode a 56-bit rejection threshold as a hex string for the tracestate `th` sub-key.
+///
+/// Per the OTel spec, the threshold is encoded as 1-14 hex digits with trailing
+/// zeros removed. A threshold of 0 encodes as "0".
+fn encode_threshold(threshold: u64, precision: u32) -> String {
+    if threshold == 0 {
+        return "0".to_string();
+    }
+    let hex = format!("{:014x}", threshold);
+    let truncated = &hex[..precision as usize];
+    truncated.trim_end_matches('0').to_string()
+}
+
+/// Extract 56-bit randomness from a trace span for consistent probability sampling.
+///
+/// Tries two sources in order:
+/// 1. The `rv` sub-key from the OTel tracestate entry
+/// 2. The least-significant 56 bits of the TraceID
+fn extract_trace_randomness<T: Matchable<Signal = TraceSignal>>(span: &T) -> Option<u64> {
+    // Try tracestate rv first
+    if let Some(tracestate) = span.get_field(&TraceFieldSelector::Simple(TraceField::TraceState))
+        && let Some(rv) = parse_tracestate_rv(&tracestate)
+    {
+        return Some(rv);
+    }
+    // Fall back to TraceID least-significant 56 bits
+    if let Some(trace_id) = span.get_field(&TraceFieldSelector::Simple(TraceField::TraceId)) {
+        return parse_trace_id_randomness(&trace_id);
+    }
+    None
+}
+
+/// Parse the `rv` (randomness value) from an OTel tracestate entry.
+///
+/// The tracestate format is `key1=value1,key2=value2,...` where the OTel
+/// entry has key `ot` and value contains semicolon-separated sub-keys like
+/// `rv:XXXXXXXXXXXX`. The rv value is up to 14 hex digits representing
+/// a 56-bit randomness value.
+fn parse_tracestate_rv(tracestate: &str) -> Option<u64> {
+    // Find the "ot" vendor entry
+    for entry in tracestate.split(',') {
+        let entry = entry.trim();
+        if let Some(value) = entry.strip_prefix("ot=") {
+            // Parse semicolon-separated sub-keys
+            for sub_key in value.split(';') {
+                if let Some(rv_hex) = sub_key.strip_prefix("rv:") {
+                    // Parse hex value, left-aligned to 14 digits
+                    let padded = format!("{:0<14}", rv_hex);
+                    return u64::from_str_radix(&padded, 16)
+                        .ok()
+                        .map(|v| v & RANDOMNESS_MASK);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Parse 56-bit randomness from a TraceID string.
+///
+/// The TraceID is a 32-character hex string. We take the last 14 hex
+/// characters (least-significant 56 bits) as the randomness value.
+fn parse_trace_id_randomness(trace_id: &str) -> Option<u64> {
+    if trace_id.len() < 14 {
+        return None;
+    }
+    let suffix = &trace_id[trace_id.len() - 14..];
+    u64::from_str_radix(suffix, 16)
+        .ok()
+        .map(|v| v & RANDOMNESS_MASK)
 }
 
 #[cfg(test)]
@@ -2949,5 +3057,838 @@ mod tests {
             .with_scope_name("otel-prod-sdk");
         let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    // ==================== Trace Tests ====================
+
+    use crate::engine::signal::TraceSignal;
+    use crate::field::TraceFieldSelector;
+    use crate::proto::tero::policy::v1::{
+        SpanKind, SpanStatusCode, TraceField, TraceMatcher, TraceSamplingConfig, TraceTarget,
+        trace_matcher,
+    };
+
+    /// Test span implementation for trace evaluation tests.
+    struct TestSpan {
+        name: Option<String>,
+        trace_id: Option<String>,
+        tracestate: Option<String>,
+        span_kind: Option<SpanKind>,
+        span_status: Option<SpanStatusCode>,
+        span_attributes: HashMap<String, String>,
+        resource_attributes: HashMap<String, String>,
+        /// Written by the engine via `add_field` for `SamplingThreshold`.
+        th_value: Option<String>,
+    }
+
+    impl TestSpan {
+        fn new() -> Self {
+            Self {
+                name: None,
+                trace_id: None,
+                tracestate: None,
+                span_kind: None,
+                span_status: None,
+                span_attributes: HashMap::new(),
+                resource_attributes: HashMap::new(),
+                th_value: None,
+            }
+        }
+
+        fn with_name(mut self, name: &str) -> Self {
+            self.name = Some(name.to_string());
+            self
+        }
+
+        fn with_trace_id(mut self, trace_id: &str) -> Self {
+            self.trace_id = Some(trace_id.to_string());
+            self
+        }
+
+        fn with_tracestate(mut self, tracestate: &str) -> Self {
+            self.tracestate = Some(tracestate.to_string());
+            self
+        }
+
+        fn with_span_kind(mut self, kind: SpanKind) -> Self {
+            self.span_kind = Some(kind);
+            self
+        }
+
+        fn with_span_status(mut self, status: SpanStatusCode) -> Self {
+            self.span_status = Some(status);
+            self
+        }
+
+        fn with_span_attr(mut self, key: &str, value: &str) -> Self {
+            self.span_attributes
+                .insert(key.to_string(), value.to_string());
+            self
+        }
+
+        #[allow(dead_code)]
+        fn with_resource_attr(mut self, key: &str, value: &str) -> Self {
+            self.resource_attributes
+                .insert(key.to_string(), value.to_string());
+            self
+        }
+    }
+
+    impl Matchable for TestSpan {
+        type Signal = TraceSignal;
+
+        fn get_field(&self, field: &TraceFieldSelector) -> Option<Cow<'_, str>> {
+            match field {
+                TraceFieldSelector::Simple(trace_field) => match trace_field {
+                    TraceField::Name => self.name.as_deref().map(Cow::Borrowed),
+                    TraceField::TraceId => self.trace_id.as_deref().map(Cow::Borrowed),
+                    TraceField::TraceState => self.tracestate.as_deref().map(Cow::Borrowed),
+                    _ => None,
+                },
+                TraceFieldSelector::SpanKind => self
+                    .span_kind
+                    .map(|k| Cow::Owned(k.as_str_name().to_string())),
+                TraceFieldSelector::SpanStatus => self
+                    .span_status
+                    .map(|s| Cow::Owned(s.as_str_name().to_string())),
+                TraceFieldSelector::SpanAttribute(path) => path
+                    .first()
+                    .and_then(|key| self.span_attributes.get(key))
+                    .map(|s| Cow::Borrowed(s.as_str())),
+                TraceFieldSelector::ResourceAttribute(path) => path
+                    .first()
+                    .and_then(|key| self.resource_attributes.get(key))
+                    .map(|s| Cow::Borrowed(s.as_str())),
+                _ => None,
+            }
+        }
+    }
+
+    impl Transformable for TestSpan {
+        fn remove_field(&mut self, _field: &TraceFieldSelector) -> bool {
+            false
+        }
+
+        fn redact_field(&mut self, _field: &TraceFieldSelector, _replacement: &str) -> bool {
+            false
+        }
+
+        fn rename_field(&mut self, _from: &TraceFieldSelector, _to: &str, _upsert: bool) -> bool {
+            false
+        }
+
+        fn add_field(&mut self, field: &TraceFieldSelector, value: &str, _upsert: bool) -> bool {
+            if matches!(field, TraceFieldSelector::SamplingThreshold) {
+                self.th_value = Some(value.to_string());
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    fn make_trace_policy(
+        id: &str,
+        matchers: Vec<TraceMatcher>,
+        sampling: Option<TraceSamplingConfig>,
+        enabled: bool,
+    ) -> Policy {
+        let trace_target = TraceTarget {
+            r#match: matchers,
+            keep: sampling,
+        };
+
+        let proto = ProtoPolicy {
+            id: id.to_string(),
+            name: id.to_string(),
+            enabled,
+            target: Some(crate::proto::tero::policy::v1::policy::Target::Trace(
+                trace_target,
+            )),
+            ..Default::default()
+        };
+
+        Policy::new(proto)
+    }
+
+    fn trace_name_regex_matcher(pattern: &str, negate: bool) -> TraceMatcher {
+        TraceMatcher {
+            field: Some(trace_matcher::Field::TraceField(TraceField::Name.into())),
+            r#match: Some(trace_matcher::Match::Regex(pattern.to_string())),
+            negate,
+            case_insensitive: false,
+        }
+    }
+
+    fn trace_span_kind_matcher(kind: SpanKind) -> TraceMatcher {
+        TraceMatcher {
+            field: Some(trace_matcher::Field::SpanKind(kind.into())),
+            r#match: None,
+            negate: false,
+            case_insensitive: false,
+        }
+    }
+
+    fn trace_span_status_matcher(status: SpanStatusCode) -> TraceMatcher {
+        TraceMatcher {
+            field: Some(trace_matcher::Field::SpanStatus(status.into())),
+            r#match: None,
+            negate: false,
+            case_insensitive: false,
+        }
+    }
+
+    fn trace_span_attr_regex_matcher(key: &str, pattern: &str) -> TraceMatcher {
+        TraceMatcher {
+            field: Some(trace_matcher::Field::SpanAttribute(
+                crate::proto::tero::policy::v1::AttributePath {
+                    path: vec![key.to_string()],
+                },
+            )),
+            r#match: Some(trace_matcher::Match::Regex(pattern.to_string())),
+            negate: false,
+            case_insensitive: false,
+        }
+    }
+
+    fn sampling_config(percentage: f32) -> TraceSamplingConfig {
+        TraceSamplingConfig {
+            percentage,
+            mode: None,
+            sampling_precision: Some(4),
+            hash_seed: None,
+            fail_closed: Some(true),
+        }
+    }
+
+    // Helper: create a trace_id whose last 14 hex chars produce a known randomness
+    fn trace_id_with_randomness(randomness: u64) -> String {
+        // Pad to 32 hex chars total, last 14 carry the randomness
+        format!("{:018x}{:014x}", 0u64, randomness)
+    }
+
+    #[test]
+    fn encode_threshold_values() {
+        // Threshold 0 → "0"
+        assert_eq!(encode_threshold(0, 4), "0");
+
+        // Non-zero threshold with trailing zeros stripped
+        // 0x00800000000000 → "00800000000000", precision 4 → "0080", trim → "008"
+        assert_eq!(encode_threshold(0x00800000000000, 4), "008");
+
+        // Full precision, trailing zeros stripped (leading zeros preserved)
+        assert_eq!(encode_threshold(0x00abcdef000000, 14), "00abcdef");
+
+        // Precision truncation (leading zeros from 14-hex encoding preserved)
+        assert_eq!(encode_threshold(0x00abcdef123456, 4), "00ab");
+
+        // Value with significant digits starting at precision boundary
+        assert_eq!(encode_threshold(0xabcd0000000000, 4), "abcd");
+    }
+
+    #[test]
+    fn parse_tracestate_rv_values() {
+        // Standard OTel tracestate with rv
+        assert_eq!(
+            parse_tracestate_rv("ot=rv:abcdef12345678"),
+            Some(0xabcdef12345678)
+        );
+
+        // rv with other sub-keys
+        assert_eq!(
+            parse_tracestate_rv("ot=th:5;rv:abcdef12345678"),
+            Some(0xabcdef12345678)
+        );
+
+        // rv with other vendor entries
+        assert_eq!(
+            parse_tracestate_rv("vendor1=foo,ot=rv:abcdef12345678,vendor2=bar"),
+            Some(0xabcdef12345678)
+        );
+
+        // Short rv (left-padded with zeros on right)
+        assert_eq!(parse_tracestate_rv("ot=rv:abc"), Some(0xabc00000000000));
+
+        // No ot entry
+        assert_eq!(parse_tracestate_rv("vendor1=foo"), None);
+
+        // No rv sub-key
+        assert_eq!(parse_tracestate_rv("ot=th:5"), None);
+    }
+
+    #[test]
+    fn parse_trace_id_randomness_values() {
+        // Standard 32-char trace ID: last 14 hex chars are the randomness source
+        let trace_id = "0af7651916cd43dd8448eb211c80319c";
+        let result = parse_trace_id_randomness(trace_id);
+        assert!(result.is_some());
+        // "0af7651916cd43dd8448eb211c80319c"[18..32] = "48eb211c80319c"
+        let expected = u64::from_str_radix("48eb211c80319c", 16).unwrap() & RANDOMNESS_MASK;
+        assert_eq!(result.unwrap(), expected);
+
+        // Too short
+        assert_eq!(parse_trace_id_randomness("abc"), None);
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_no_policies_returns_no_match() {
+        let registry = PolicyRegistry::new();
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let mut span = TestSpan::new().with_name("GET /api/users");
+
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        assert_eq!(result, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_sampled_100_percent() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "keep-all",
+            vec![trace_name_regex_matcher("GET.*", false)],
+            Some(sampling_config(100.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let mut span = TestSpan::new()
+            .with_name("GET /api/users")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        assert_eq!(
+            result,
+            EvaluateResult::Keep {
+                policy_id: "keep-all".to_string(),
+                transformed: true,
+            }
+        );
+        // th="0" should be written (100% = threshold 0)
+        assert_eq!(span.th_value, Some("0".to_string()));
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_not_sampled_0_percent() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "drop-all",
+            vec![trace_name_regex_matcher("GET.*", false)],
+            Some(sampling_config(0.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let mut span = TestSpan::new()
+            .with_name("GET /api/users")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        assert_eq!(
+            result,
+            EvaluateResult::Drop {
+                policy_id: "drop-all".to_string(),
+            }
+        );
+        // No th should be written
+        assert_eq!(span.th_value, None);
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_partial_sampling_with_traceid() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "sample-50",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config(50.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Use a known randomness value via trace_id
+        let threshold = rejection_threshold(0.5);
+        // Randomness above threshold → kept
+        let high_randomness = threshold + 1;
+        let mut span_keep = TestSpan::new()
+            .with_name("test-span")
+            .with_trace_id(&trace_id_with_randomness(high_randomness));
+
+        let result = engine
+            .evaluate_trace(&snapshot, &mut span_keep)
+            .await
+            .unwrap();
+        match &result {
+            EvaluateResult::Sample { keep, .. } => {
+                assert!(keep, "High randomness should be kept");
+                assert!(
+                    span_keep.th_value.is_some(),
+                    "th should be written when kept"
+                );
+            }
+            _ => panic!("expected Sample result, got {:?}", result),
+        }
+
+        // Randomness below threshold → dropped
+        let low_randomness = threshold.saturating_sub(1);
+        let mut span_drop = TestSpan::new()
+            .with_name("test-span")
+            .with_trace_id(&trace_id_with_randomness(low_randomness));
+
+        let result = engine
+            .evaluate_trace(&snapshot, &mut span_drop)
+            .await
+            .unwrap();
+        match &result {
+            EvaluateResult::Sample { keep, .. } => {
+                assert!(!keep, "Low randomness should be dropped");
+                assert!(
+                    span_drop.th_value.is_none(),
+                    "th should not be written when dropped"
+                );
+            }
+            _ => panic!("expected Sample result, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_span_kind_matcher() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "server-spans",
+            vec![trace_span_kind_matcher(SpanKind::Server)],
+            Some(sampling_config(100.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Matching span kind
+        let mut span1 = TestSpan::new()
+            .with_name("handle-request")
+            .with_span_kind(SpanKind::Server)
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        assert!(matches!(result1, EvaluateResult::Keep { .. }));
+
+        // Non-matching span kind
+        let mut span2 = TestSpan::new()
+            .with_name("call-service")
+            .with_span_kind(SpanKind::Client)
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_span_status_matcher() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "error-spans",
+            vec![trace_span_status_matcher(SpanStatusCode::Error)],
+            Some(sampling_config(100.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let mut span1 = TestSpan::new()
+            .with_name("failing-op")
+            .with_span_status(SpanStatusCode::Error)
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        assert!(matches!(result1, EvaluateResult::Keep { .. }));
+
+        let mut span2 = TestSpan::new()
+            .with_name("ok-op")
+            .with_span_status(SpanStatusCode::Ok)
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_span_attribute() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "http-spans",
+            vec![trace_span_attr_regex_matcher("http.method", "GET|POST")],
+            Some(sampling_config(100.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let mut span1 = TestSpan::new()
+            .with_name("request")
+            .with_span_attr("http.method", "GET")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+
+        let result = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        assert!(matches!(result, EvaluateResult::Keep { .. }));
+
+        let mut span2 = TestSpan::new()
+            .with_name("request")
+            .with_span_attr("http.method", "DELETE")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_writes_th_to_tracestate() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        // 50% sampling with precision 4
+        let policy = make_trace_policy(
+            "sample-50",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config(50.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Use a high randomness trace ID that will be kept at 50%
+        let threshold = rejection_threshold(0.5);
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(threshold + 1000));
+
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        match result {
+            EvaluateResult::Sample { keep, .. } => {
+                assert!(keep);
+                // th should be a non-empty hex string
+                let th = span.th_value.as_ref().unwrap();
+                assert!(!th.is_empty());
+                // Should not have trailing zeros
+                assert!(!th.ends_with('0') || th == "0");
+            }
+            _ => panic!("expected Sample result, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_uses_tracestate_rv_over_traceid() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "sample-50",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config(50.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let threshold = rejection_threshold(0.5);
+        // TraceID randomness would be dropped (low), but tracestate rv is high (kept)
+        let high_rv = threshold + 1000;
+        let rv_hex = format!("{:014x}", high_rv);
+        let tracestate = format!("ot=rv:{}", rv_hex);
+
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(0)) // low randomness (would be dropped)
+            .with_tracestate(&tracestate);
+
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        match result {
+            EvaluateResult::Sample { keep, .. } => {
+                assert!(keep, "Should use tracestate rv (high) over trace_id (low)");
+            }
+            _ => panic!("expected Sample result, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_multiple_matchers_and_logic() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        // Requires both name AND span_kind to match
+        let policy = make_trace_policy(
+            "server-gets",
+            vec![
+                trace_name_regex_matcher("GET.*", false),
+                trace_span_kind_matcher(SpanKind::Server),
+            ],
+            Some(sampling_config(100.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Both match
+        let mut span1 = TestSpan::new()
+            .with_name("GET /users")
+            .with_span_kind(SpanKind::Server)
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        assert!(matches!(result1, EvaluateResult::Keep { .. }));
+
+        // Only name matches
+        let mut span2 = TestSpan::new()
+            .with_name("GET /users")
+            .with_span_kind(SpanKind::Client)
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+
+        // Only span kind matches
+        let mut span3 = TestSpan::new()
+            .with_name("POST /users")
+            .with_span_kind(SpanKind::Server)
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result3 = engine.evaluate_trace(&snapshot, &mut span3).await.unwrap();
+        assert_eq!(result3, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_most_restrictive_wins() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        // Two policies match, one at 100% and one at 10%
+        let policy_100 = make_trace_policy(
+            "keep-all",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config(100.0)),
+            true,
+        );
+        let policy_10 = make_trace_policy(
+            "sample-10",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config(10.0)),
+            true,
+        );
+        handle.update(vec![policy_100, policy_10]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        // 10% is more restrictive than 100%
+        match result {
+            EvaluateResult::Sample {
+                policy_id,
+                percentage,
+                ..
+            } => {
+                assert_eq!(policy_id, "sample-10");
+                assert!((percentage - 10.0).abs() < 0.01);
+            }
+            _ => panic!("expected Sample result, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_negated_matcher() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        // Match all spans EXCEPT those with name containing "health"
+        let policy = make_trace_policy(
+            "skip-health",
+            vec![
+                trace_name_regex_matcher(".+", false),
+                trace_name_regex_matcher("health", true), // negated
+            ],
+            Some(sampling_config(100.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Non-health span matches
+        let mut span1 = TestSpan::new()
+            .with_name("GET /api/users")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        assert!(matches!(result1, EvaluateResult::Keep { .. }));
+
+        // Health span is disqualified
+        let mut span2 = TestSpan::new()
+            .with_name("GET /health")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_fail_closed_no_randomness() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let mut config = sampling_config(50.0);
+        config.fail_closed = Some(true);
+
+        let policy = make_trace_policy(
+            "fail-closed",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(config),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Span with no trace_id and no tracestate — no randomness available
+        let mut span = TestSpan::new().with_name("test");
+
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        assert_eq!(
+            result,
+            EvaluateResult::Drop {
+                policy_id: "fail-closed".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_fail_open_no_randomness() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let mut config = sampling_config(50.0);
+        config.fail_closed = Some(false);
+
+        let policy = make_trace_policy(
+            "fail-open",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(config),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Span with no trace_id and no tracestate
+        let mut span = TestSpan::new().with_name("test");
+
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        assert_eq!(
+            result,
+            EvaluateResult::Keep {
+                policy_id: "fail-open".to_string(),
+                transformed: false,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn mixed_log_metric_trace_signal_isolation() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        // Register one policy of each signal type
+        let log_policy = make_policy(
+            "log-policy",
+            vec![body_regex_matcher("error", false)],
+            "none",
+            true,
+        );
+
+        let metric_policy = {
+            let matcher = MetricMatcher {
+                field: Some(metric_matcher::Field::MetricField(MetricField::Name.into())),
+                r#match: Some(metric_matcher::Match::Regex("cpu.*".to_string())),
+                negate: false,
+                case_insensitive: false,
+            };
+            let metric_target = crate::proto::tero::policy::v1::MetricTarget {
+                r#match: vec![matcher],
+                keep: false,
+            };
+            let proto = ProtoPolicy {
+                id: "metric-policy".to_string(),
+                name: "metric-policy".to_string(),
+                enabled: true,
+                target: Some(crate::proto::tero::policy::v1::policy::Target::Metric(
+                    metric_target,
+                )),
+                ..Default::default()
+            };
+            Policy::new(proto)
+        };
+
+        let trace_policy = make_trace_policy(
+            "trace-policy",
+            vec![trace_name_regex_matcher("GET.*", false)],
+            Some(sampling_config(100.0)),
+            true,
+        );
+
+        handle.update(vec![log_policy, metric_policy, trace_policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Log evaluation — only log policy should match
+        let log = TestLog::new().with_body("error occurred");
+        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        assert!(matches!(result, EvaluateResult::Drop { .. }));
+
+        // Metric evaluation — only metric policy should match
+        let metric = TestMetric::new().with_name("cpu.usage");
+        let result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        assert!(matches!(result, EvaluateResult::Drop { .. }));
+
+        // Trace evaluation — only trace policy should match
+        let mut span = TestSpan::new()
+            .with_name("GET /api")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        assert!(matches!(result, EvaluateResult::Keep { .. }));
+
+        // Cross-signal isolation: trace span should NOT match log/metric policies
+        let mut span2 = TestSpan::new().with_name("error"); // matches log pattern but this is a trace
+        let result = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        assert_eq!(result, EvaluateResult::NoMatch); // "error" doesn't match "GET.*"
     }
 }

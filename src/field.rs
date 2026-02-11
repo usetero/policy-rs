@@ -1,6 +1,6 @@
 //! Field selection utilities for telemetry records.
 
-use crate::proto::tero::policy::v1::{AttributePath, LogField, MetricField};
+use crate::proto::tero::policy::v1::{AttributePath, LogField, MetricField, TraceField};
 
 /// Represents a field selector for log records.
 ///
@@ -124,6 +124,74 @@ impl MetricFieldSelector {
     }
 }
 
+/// Represents a field selector for trace/span records.
+///
+/// Attribute selectors use a path (Vec<String>) to support nested attribute access.
+/// Enum fields (SpanKind, SpanStatus) and string fields (EventName, LinkTraceId)
+/// use unit variants with synthesized exact-match patterns at compile time.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TraceFieldSelector {
+    /// Simple trace field (name, trace_id, span_id, etc.)
+    Simple(TraceField),
+    /// Span attribute by path
+    SpanAttribute(Vec<String>),
+    /// Resource attribute by path
+    ResourceAttribute(Vec<String>),
+    /// Scope attribute by path
+    ScopeAttribute(Vec<String>),
+    /// Span kind — synthesized exact match on SpanKind::as_str_name()
+    SpanKind,
+    /// Span status code — synthesized exact match on SpanStatusCode::as_str_name()
+    SpanStatus,
+    /// Event name — synthesized exact match on event_name string value
+    EventName,
+    /// Event attribute by path
+    EventAttribute(Vec<String>),
+    /// Link trace ID — synthesized exact match on link_trace_id string value
+    LinkTraceId,
+    /// Sampling threshold — write-only field used by the engine to write the
+    /// OTel `th` value to the span's tracestate via `Transformable::add_field`.
+    SamplingThreshold,
+}
+
+impl TraceFieldSelector {
+    /// Create a TraceFieldSelector from an AttributePath for span attributes.
+    pub fn from_span_attribute(path: &AttributePath) -> Self {
+        TraceFieldSelector::SpanAttribute(path.path.clone())
+    }
+
+    /// Create a TraceFieldSelector from an AttributePath for resource attributes.
+    pub fn from_resource_attribute(path: &AttributePath) -> Self {
+        TraceFieldSelector::ResourceAttribute(path.path.clone())
+    }
+
+    /// Create a TraceFieldSelector from an AttributePath for scope attributes.
+    pub fn from_scope_attribute(path: &AttributePath) -> Self {
+        TraceFieldSelector::ScopeAttribute(path.path.clone())
+    }
+
+    /// Create a TraceFieldSelector from an AttributePath for event attributes.
+    pub fn from_event_attribute(path: &AttributePath) -> Self {
+        TraceFieldSelector::EventAttribute(path.path.clone())
+    }
+
+    /// Returns the attribute path if this is an attribute selector.
+    pub fn attribute_path(&self) -> Option<&[String]> {
+        match self {
+            TraceFieldSelector::SpanAttribute(p)
+            | TraceFieldSelector::ResourceAttribute(p)
+            | TraceFieldSelector::ScopeAttribute(p)
+            | TraceFieldSelector::EventAttribute(p) => Some(p),
+            TraceFieldSelector::Simple(_)
+            | TraceFieldSelector::SpanKind
+            | TraceFieldSelector::SpanStatus
+            | TraceFieldSelector::EventName
+            | TraceFieldSelector::LinkTraceId
+            | TraceFieldSelector::SamplingThreshold => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +253,36 @@ mod tests {
     fn attribute_key_backward_compat() {
         let selector = LogFieldSelector::LogAttribute(vec!["user_id".to_string()]);
         assert_eq!(selector.attribute_key(), Some("user_id"));
+    }
+
+    #[test]
+    fn trace_field_selector_from_span_attribute() {
+        let path = AttributePath {
+            path: vec!["http.method".to_string()],
+        };
+        let selector = TraceFieldSelector::from_span_attribute(&path);
+        assert_eq!(
+            selector,
+            TraceFieldSelector::SpanAttribute(vec!["http.method".to_string()])
+        );
+        assert_eq!(
+            selector.attribute_path(),
+            Some(&["http.method".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn trace_field_selector_simple_has_no_path() {
+        let selector = TraceFieldSelector::Simple(TraceField::Name);
+        assert_eq!(selector.attribute_path(), None);
+    }
+
+    #[test]
+    fn trace_field_selector_unit_variants_have_no_path() {
+        assert_eq!(TraceFieldSelector::SpanKind.attribute_path(), None);
+        assert_eq!(TraceFieldSelector::SpanStatus.attribute_path(), None);
+        assert_eq!(TraceFieldSelector::EventName.attribute_path(), None);
+        assert_eq!(TraceFieldSelector::LinkTraceId.attribute_path(), None);
+        assert_eq!(TraceFieldSelector::SamplingThreshold.attribute_path(), None);
     }
 }
