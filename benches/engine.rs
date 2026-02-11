@@ -4,11 +4,12 @@ use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, 
 use policy_rs::proto::tero::policy::v1::{
     AttributePath, LogAdd, LogField, LogMatcher, LogRedact, LogRemove, LogRename, LogTarget,
     LogTransform, MetricField, MetricMatcher, MetricTarget, MetricType, Policy as ProtoPolicy,
-    log_add, log_matcher, log_redact, log_remove, log_rename, metric_matcher,
+    SpanKind, TraceField, TraceMatcher, TraceSamplingConfig, TraceTarget, log_add, log_matcher,
+    log_redact, log_remove, log_rename, metric_matcher, trace_matcher,
 };
 use policy_rs::{
     LogFieldSelector, LogSignal, Matchable, MetricFieldSelector, MetricSignal, Policy,
-    PolicyEngine, PolicyRegistry, Transformable,
+    PolicyEngine, PolicyRegistry, TraceFieldSelector, TraceSignal, Transformable,
 };
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -1028,6 +1029,312 @@ fn bench_metric_throughput(c: &mut Criterion) {
     group.finish();
 }
 
+// ==================== Trace Benchmarks ====================
+
+/// Test span record for benchmarking.
+struct BenchSpan {
+    name: String,
+    trace_id: String,
+    tracestate: String,
+    span_kind: Option<String>,
+    span_status: Option<String>,
+    attributes: HashMap<String, String>,
+    th_value: Option<String>,
+}
+
+impl BenchSpan {
+    fn new(name: &str, trace_id: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            trace_id: trace_id.to_string(),
+            tracestate: String::new(),
+            span_kind: None,
+            span_status: None,
+            attributes: HashMap::new(),
+            th_value: None,
+        }
+    }
+
+    fn with_span_kind(mut self, kind: &str) -> Self {
+        self.span_kind = Some(kind.to_string());
+        self
+    }
+
+    #[allow(dead_code)]
+    fn with_attr(mut self, key: &str, value: &str) -> Self {
+        self.attributes.insert(key.to_string(), value.to_string());
+        self
+    }
+}
+
+impl Matchable for BenchSpan {
+    type Signal = TraceSignal;
+
+    fn get_field(&self, field: &TraceFieldSelector) -> Option<Cow<'_, str>> {
+        match field {
+            TraceFieldSelector::Simple(trace_field) => match trace_field {
+                TraceField::Name => Some(Cow::Borrowed(&self.name)),
+                TraceField::TraceId => Some(Cow::Borrowed(&self.trace_id)),
+                TraceField::TraceState => {
+                    if self.tracestate.is_empty() {
+                        None
+                    } else {
+                        Some(Cow::Borrowed(&self.tracestate))
+                    }
+                }
+                _ => None,
+            },
+            TraceFieldSelector::SpanAttribute(path) => path
+                .first()
+                .and_then(|key| self.attributes.get(key))
+                .map(|s| Cow::Borrowed(s.as_str())),
+            TraceFieldSelector::SpanKind => self.span_kind.as_deref().map(Cow::Borrowed),
+            TraceFieldSelector::SpanStatus => self.span_status.as_deref().map(Cow::Borrowed),
+            _ => None,
+        }
+    }
+}
+
+impl Transformable for BenchSpan {
+    fn remove_field(&mut self, _field: &TraceFieldSelector) -> bool {
+        false
+    }
+
+    fn redact_field(&mut self, _field: &TraceFieldSelector, _replacement: &str) -> bool {
+        false
+    }
+
+    fn rename_field(&mut self, _from: &TraceFieldSelector, _to: &str, _upsert: bool) -> bool {
+        false
+    }
+
+    fn add_field(&mut self, field: &TraceFieldSelector, value: &str, _upsert: bool) -> bool {
+        if matches!(field, TraceFieldSelector::SamplingThreshold) {
+            self.th_value = Some(value.to_string());
+            return true;
+        }
+        false
+    }
+}
+
+fn create_trace_policy(id: &str, field: trace_matcher::Field, percentage: f32) -> Policy {
+    let matcher = TraceMatcher {
+        field: Some(field),
+        r#match: None,
+        negate: false,
+        case_insensitive: false,
+    };
+
+    let trace_target = TraceTarget {
+        r#match: vec![matcher],
+        keep: Some(TraceSamplingConfig {
+            percentage,
+            mode: None,
+            sampling_precision: Some(4),
+            hash_seed: None,
+            fail_closed: Some(true),
+        }),
+    };
+
+    let proto = ProtoPolicy {
+        id: id.to_string(),
+        name: id.to_string(),
+        enabled: true,
+        target: Some(policy_rs::proto::tero::policy::v1::policy::Target::Trace(
+            trace_target,
+        )),
+        ..Default::default()
+    };
+
+    Policy::new(proto)
+}
+
+fn create_trace_policy_with_name_regex(id: &str, pattern: &str, percentage: f32) -> Policy {
+    let matcher = TraceMatcher {
+        field: Some(trace_matcher::Field::TraceField(TraceField::Name.into())),
+        r#match: Some(trace_matcher::Match::Regex(pattern.to_string())),
+        negate: false,
+        case_insensitive: false,
+    };
+
+    let trace_target = TraceTarget {
+        r#match: vec![matcher],
+        keep: Some(TraceSamplingConfig {
+            percentage,
+            mode: None,
+            sampling_precision: Some(4),
+            hash_seed: None,
+            fail_closed: Some(true),
+        }),
+    };
+
+    let proto = ProtoPolicy {
+        id: id.to_string(),
+        name: id.to_string(),
+        enabled: true,
+        target: Some(policy_rs::proto::tero::policy::v1::policy::Target::Trace(
+            trace_target,
+        )),
+        ..Default::default()
+    };
+
+    Policy::new(proto)
+}
+
+fn bench_trace_evaluate_single_policy(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+
+    let registry = PolicyRegistry::new();
+    let handle = registry.register_provider();
+    handle.update(vec![create_trace_policy(
+        "sample-server",
+        trace_matcher::Field::SpanKind(SpanKind::Server.into()),
+        50.0,
+    )]);
+
+    let snapshot = registry.snapshot();
+    let engine = PolicyEngine::new();
+
+    let mut group = c.benchmark_group("trace_single_policy");
+
+    group.bench_function("matching", |b| {
+        b.to_async(&rt).iter(|| async {
+            let mut span = BenchSpan::new("GET /api", "00000000000000000000000000000001")
+                .with_span_kind("SPAN_KIND_SERVER");
+            black_box(engine.evaluate_trace(&snapshot, &mut span).await.unwrap())
+        })
+    });
+
+    group.bench_function("non_matching", |b| {
+        b.to_async(&rt).iter(|| async {
+            let mut span = BenchSpan::new("internal-task", "00000000000000000000000000000001")
+                .with_span_kind("SPAN_KIND_INTERNAL");
+            black_box(engine.evaluate_trace(&snapshot, &mut span).await.unwrap())
+        })
+    });
+
+    group.finish();
+}
+
+fn bench_trace_evaluate_multiple_policies(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+
+    let mut group = c.benchmark_group("trace_policy_count");
+
+    for policy_count in [1, 10, 50, 100] {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policies: Vec<Policy> = (0..policy_count)
+            .map(|i| {
+                create_trace_policy_with_name_regex(
+                    &format!("policy-{}", i),
+                    &format!("pattern{}", i),
+                    50.0,
+                )
+            })
+            .collect();
+        handle.update(policies);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        group.throughput(Throughput::Elements(1));
+        group.bench_with_input(
+            BenchmarkId::new("evaluate", policy_count),
+            &policy_count,
+            |b, _| {
+                b.to_async(&rt).iter(|| async {
+                    let mut span =
+                        BenchSpan::new("no-match-span", "00000000000000000000000000000001");
+                    black_box(engine.evaluate_trace(&snapshot, &mut span).await.unwrap())
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_trace_throughput(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+
+    let registry = PolicyRegistry::new();
+    let handle = registry.register_provider();
+    handle.update(vec![
+        create_trace_policy(
+            "sample-server",
+            trace_matcher::Field::SpanKind(SpanKind::Server.into()),
+            50.0,
+        ),
+        create_trace_policy(
+            "sample-client",
+            trace_matcher::Field::SpanKind(SpanKind::Client.into()),
+            75.0,
+        ),
+        create_trace_policy(
+            "keep-consumer",
+            trace_matcher::Field::SpanKind(SpanKind::Consumer.into()),
+            100.0,
+        ),
+    ]);
+
+    let snapshot = registry.snapshot();
+    let engine = PolicyEngine::new();
+
+    let mut group = c.benchmark_group("trace_throughput");
+    group.throughput(Throughput::Elements(1000));
+
+    group.bench_function("batch_1000", |b| {
+        b.to_async(&rt).iter(|| async {
+            for i in 0..1000u64 {
+                let kind = match i % 3 {
+                    0 => "SPAN_KIND_SERVER",
+                    1 => "SPAN_KIND_CLIENT",
+                    _ => "SPAN_KIND_CONSUMER",
+                };
+                let trace_id = format!("{:032x}", i);
+                let mut span = BenchSpan::new("span-op", &trace_id).with_span_kind(kind);
+                black_box(engine.evaluate_trace(&snapshot, &mut span).await.unwrap());
+            }
+        })
+    });
+
+    group.finish();
+}
+
+fn bench_trace_sampling(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+
+    let mut group = c.benchmark_group("trace_sampling");
+
+    for percentage in [1.0f32, 10.0, 50.0, 99.0, 100.0] {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+        handle.update(vec![create_trace_policy_with_name_regex(
+            "sample-all",
+            ".+",
+            percentage,
+        )]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        group.bench_with_input(
+            BenchmarkId::new("percentage", format!("{}", percentage)),
+            &percentage,
+            |b, _| {
+                b.to_async(&rt).iter(|| async {
+                    let mut span = BenchSpan::new("test-span", "00000000000000000000000000000001");
+                    black_box(engine.evaluate_trace(&snapshot, &mut span).await.unwrap())
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_evaluate_single_policy,
@@ -1042,6 +1349,10 @@ criterion_group!(
     bench_metric_evaluate_single_policy,
     bench_metric_evaluate_multiple_policies,
     bench_metric_throughput,
+    bench_trace_evaluate_single_policy,
+    bench_trace_evaluate_multiple_policies,
+    bench_trace_throughput,
+    bench_trace_sampling,
 );
 
 criterion_main!(benches);
