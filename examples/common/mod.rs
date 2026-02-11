@@ -2,9 +2,10 @@
 
 #![allow(dead_code)]
 
-use policy_rs::proto::tero::policy::v1::{LogField, MetricField, MetricType};
+use policy_rs::proto::tero::policy::v1::{LogField, MetricField, MetricType, TraceField};
 use policy_rs::{
-    LogFieldSelector, LogSignal, Matchable, MetricFieldSelector, MetricSignal, Transformable,
+    LogFieldSelector, LogSignal, Matchable, MetricFieldSelector, MetricSignal, TraceFieldSelector,
+    TraceSignal, Transformable,
 };
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -273,6 +274,141 @@ impl Matchable for MetricRecord {
                 .as_ref()
                 .map(|t| Cow::Borrowed(t.as_str_name())),
             _ => None,
+        }
+    }
+}
+
+/// A simple span record for demonstration.
+#[derive(Debug, Clone)]
+pub struct SpanRecord {
+    pub name: String,
+    pub trace_id: String,
+    pub span_id: String,
+    pub tracestate: String,
+    pub span_kind: Option<String>,
+    pub span_status: Option<String>,
+    pub attributes: HashMap<String, String>,
+    pub resource_attributes: HashMap<String, String>,
+    pub th_value: Option<String>,
+}
+
+impl SpanRecord {
+    pub fn new(name: &str, trace_id: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            trace_id: trace_id.to_string(),
+            span_id: "0000000000000001".to_string(),
+            tracestate: String::new(),
+            span_kind: None,
+            span_status: None,
+            attributes: HashMap::new(),
+            resource_attributes: HashMap::new(),
+            th_value: None,
+        }
+    }
+
+    pub fn with_span_kind(mut self, kind: &str) -> Self {
+        self.span_kind = Some(kind.to_string());
+        self
+    }
+
+    pub fn with_span_status(mut self, status: &str) -> Self {
+        self.span_status = Some(status.to_string());
+        self
+    }
+
+    pub fn with_tracestate(mut self, ts: &str) -> Self {
+        self.tracestate = ts.to_string();
+        self
+    }
+
+    pub fn with_attr(mut self, key: &str, value: &str) -> Self {
+        self.attributes.insert(key.to_string(), value.to_string());
+        self
+    }
+
+    pub fn with_resource_attr(mut self, key: &str, value: &str) -> Self {
+        self.resource_attributes
+            .insert(key.to_string(), value.to_string());
+        self
+    }
+}
+
+impl Matchable for SpanRecord {
+    type Signal = TraceSignal;
+
+    fn get_field(&self, field: &TraceFieldSelector) -> Option<Cow<'_, str>> {
+        match field {
+            TraceFieldSelector::Simple(trace_field) => match trace_field {
+                TraceField::Name => Some(Cow::Borrowed(&self.name)),
+                TraceField::TraceId => Some(Cow::Borrowed(&self.trace_id)),
+                TraceField::SpanId => Some(Cow::Borrowed(&self.span_id)),
+                TraceField::TraceState => {
+                    if self.tracestate.is_empty() {
+                        None
+                    } else {
+                        Some(Cow::Borrowed(&self.tracestate))
+                    }
+                }
+                _ => None,
+            },
+            TraceFieldSelector::SpanAttribute(path) => path
+                .first()
+                .and_then(|key| self.attributes.get(key))
+                .map(|s| Cow::Borrowed(s.as_str())),
+            TraceFieldSelector::ResourceAttribute(path) => path
+                .first()
+                .and_then(|key| self.resource_attributes.get(key))
+                .map(|s| Cow::Borrowed(s.as_str())),
+            TraceFieldSelector::SpanKind => self.span_kind.as_deref().map(Cow::Borrowed),
+            TraceFieldSelector::SpanStatus => self.span_status.as_deref().map(Cow::Borrowed),
+            _ => None,
+        }
+    }
+}
+
+impl Transformable for SpanRecord {
+    fn remove_field(&mut self, _field: &TraceFieldSelector) -> bool {
+        false
+    }
+
+    fn redact_field(&mut self, _field: &TraceFieldSelector, _replacement: &str) -> bool {
+        false
+    }
+
+    fn rename_field(&mut self, _from: &TraceFieldSelector, _to: &str, _upsert: bool) -> bool {
+        false
+    }
+
+    fn add_field(&mut self, field: &TraceFieldSelector, value: &str, _upsert: bool) -> bool {
+        if matches!(field, TraceFieldSelector::SamplingThreshold) {
+            self.th_value = Some(value.to_string());
+            return true;
+        }
+        false
+    }
+}
+
+/// Helper to print a span record's current state.
+pub fn print_span(span: &SpanRecord) {
+    println!("  Name: {}", span.name);
+    println!("  TraceID: {}", span.trace_id);
+    if let Some(kind) = &span.span_kind {
+        println!("  Kind: {}", kind);
+    }
+    if let Some(status) = &span.span_status {
+        println!("  Status: {}", status);
+    }
+    if !span.tracestate.is_empty() {
+        println!("  Tracestate: {}", span.tracestate);
+    }
+    if let Some(th) = &span.th_value {
+        println!("  Sampling TH: {}", th);
+    }
+    if !span.attributes.is_empty() {
+        println!("  Attributes:");
+        for (k, v) in &span.attributes {
+            println!("    {}: {}", k, v);
         }
     }
 }

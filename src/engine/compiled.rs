@@ -7,16 +7,17 @@ use std::sync::Arc;
 
 use crate::Policy;
 use crate::error::PolicyError;
-use crate::field::{LogFieldSelector, MetricFieldSelector};
+use crate::field::{LogFieldSelector, MetricFieldSelector, TraceFieldSelector};
 use crate::proto::tero::policy::v1::{
     AggregationTemporality, LogField, LogMatcher, LogSampleKey, MetricField, MetricMatcher,
-    MetricType, log_matcher, log_sample_key, metric_matcher,
+    MetricType, SpanKind, SpanStatusCode, TraceField, TraceMatcher, TraceSamplingConfig,
+    log_matcher, log_sample_key, metric_matcher, trace_matcher,
 };
 use crate::registry::PolicyStats;
 
 use super::keep::CompiledKeep;
 use super::match_key::MatchKey;
-use super::signal::{LogSignal, MetricSignal, Signal};
+use super::signal::{LogSignal, MetricSignal, Signal, TraceSignal};
 use super::transform::CompiledTransform;
 
 /// Reference from a pattern match back to its policy.
@@ -24,6 +25,22 @@ use super::transform::CompiledTransform;
 pub struct PolicyMatchRef {
     /// Index into CompiledMatchers::policies.
     pub policy_index: usize,
+}
+
+/// Compiled trace sampling configuration.
+///
+/// Stores precomputed values from `TraceSamplingConfig` for efficient
+/// evaluation using the OTel consistent probability sampling algorithm.
+#[derive(Debug, Clone)]
+pub struct CompiledTraceSampling {
+    /// Precomputed 56-bit rejection threshold.
+    pub threshold: u64,
+    /// Original probability (0.0-1.0) for result reporting.
+    pub probability: f64,
+    /// Number of hex digits for threshold encoding (1-14, default 4).
+    pub precision: u32,
+    /// If true, reject spans when randomness extraction fails.
+    pub fail_closed: bool,
 }
 
 /// A compiled policy ready for evaluation.
@@ -43,6 +60,8 @@ pub struct CompiledPolicy<S: Signal> {
     pub enabled: bool,
     /// Optional sample key for consistent hash-based sampling.
     pub sample_key: Option<S::FieldSelector>,
+    /// Trace sampling configuration (only set for trace policies).
+    pub trace_sampling: Option<CompiledTraceSampling>,
 }
 
 /// Existence check that can't be handled by Vectorscan.
@@ -277,6 +296,16 @@ impl CompiledMatchers<MetricSignal> {
     }
 }
 
+impl CompiledMatchers<TraceSignal> {
+    /// Build compiled matchers from a list of trace policies.
+    pub fn build(
+        policies: impl Iterator<Item = (Policy, Arc<PolicyStats>)>,
+    ) -> Result<Self, PolicyError> {
+        let groups = PatternGroups::<TraceSignal>::build_from_trace_policies(policies)?;
+        groups.compile()
+    }
+}
+
 /// Grouped patterns ready for Hyperscan compilation.
 #[derive(Debug)]
 pub struct PatternGroups<S: Signal> {
@@ -332,6 +361,7 @@ impl PatternGroups<LogSignal> {
                 stats,
                 enabled: policy.enabled(),
                 sample_key,
+                trace_sampling: None,
             });
 
             for matcher in &log_target.r#match {
@@ -384,6 +414,7 @@ impl PatternGroups<MetricSignal> {
                 stats,
                 enabled: policy.enabled(),
                 sample_key: None,
+                trace_sampling: None,
             });
 
             for matcher in &metric_target.r#match {
@@ -393,6 +424,62 @@ impl PatternGroups<MetricSignal> {
                 let extraction = extract_metric_field(matcher)?;
 
                 // Use synthesized match for enum fields, otherwise use the matcher's match.
+                let match_type = extraction
+                    .synthesized_match
+                    .as_ref()
+                    .or(matcher.r#match.as_ref());
+
+                process_match_type(
+                    match_type,
+                    extraction.field,
+                    is_negated,
+                    case_insensitive,
+                    policy_index,
+                    &mut result.groups,
+                    &mut result.existence_checks,
+                );
+            }
+        }
+
+        Ok(result)
+    }
+}
+
+impl PatternGroups<TraceSignal> {
+    /// Build pattern groups from a list of trace policies.
+    pub fn build_from_trace_policies(
+        policies: impl Iterator<Item = (Policy, Arc<PolicyStats>)>,
+    ) -> Result<Self, PolicyError> {
+        let mut result = PatternGroups::default();
+
+        for (policy_index, (policy, stats)) in policies.enumerate() {
+            let trace_target = match policy.trace_target() {
+                Some(t) => t,
+                None => continue,
+            };
+
+            let required_match_count = trace_target.r#match.iter().filter(|m| !m.negate).count();
+
+            let keep = compile_trace_keep(trace_target.keep.as_ref());
+            let trace_sampling = compile_trace_sampling(trace_target.keep.as_ref());
+
+            result.policies.push(CompiledPolicy {
+                id: policy.id().to_string(),
+                required_match_count,
+                keep,
+                transform: None,
+                stats,
+                enabled: policy.enabled(),
+                sample_key: None,
+                trace_sampling: Some(trace_sampling),
+            });
+
+            for matcher in &trace_target.r#match {
+                let is_negated = matcher.negate;
+                let case_insensitive = matcher.case_insensitive;
+
+                let extraction = extract_trace_field(matcher)?;
+
                 let match_type = extraction
                     .synthesized_match
                     .as_ref()
@@ -581,6 +668,19 @@ impl MatchTypeAccessor for metric_matcher::Match {
     }
 }
 
+impl MatchTypeAccessor for trace_matcher::Match {
+    fn as_match_variant(&self) -> MatchVariant<'_> {
+        match self {
+            trace_matcher::Match::Exact(s) => MatchVariant::Exact(s),
+            trace_matcher::Match::Regex(s) => MatchVariant::Regex(s),
+            trace_matcher::Match::Exists(b) => MatchVariant::Exists(*b),
+            trace_matcher::Match::StartsWith(s) => MatchVariant::StartsWith(s),
+            trace_matcher::Match::EndsWith(s) => MatchVariant::EndsWith(s),
+            trace_matcher::Match::Contains(s) => MatchVariant::Contains(s),
+        }
+    }
+}
+
 // =============================================================================
 // Log-specific field extraction
 // =============================================================================
@@ -687,6 +787,115 @@ fn extract_metric_field(matcher: &MetricMatcher) -> Result<MetricFieldExtraction
         None => Err(PolicyError::FieldError {
             reason: "matcher has no field specified".to_string(),
         }),
+    }
+}
+
+// =============================================================================
+// Trace-specific field extraction and compilation
+// =============================================================================
+
+/// Extracted trace field info.
+///
+/// For enum fields (span_kind, span_status) and string-value fields
+/// (event_name, link_trace_id), the extraction produces a unit field selector
+/// and a synthesized exact-match pattern on the value's string representation.
+struct TraceFieldExtraction {
+    field: TraceFieldSelector,
+    synthesized_match: Option<trace_matcher::Match>,
+}
+
+fn extract_trace_field(matcher: &TraceMatcher) -> Result<TraceFieldExtraction, PolicyError> {
+    match &matcher.field {
+        Some(trace_matcher::Field::TraceField(f)) => {
+            let field = TraceField::try_from(*f).unwrap_or(TraceField::Unspecified);
+            Ok(TraceFieldExtraction {
+                field: TraceFieldSelector::Simple(field),
+                synthesized_match: None,
+            })
+        }
+        Some(trace_matcher::Field::SpanAttribute(path)) => Ok(TraceFieldExtraction {
+            field: TraceFieldSelector::from_span_attribute(path),
+            synthesized_match: None,
+        }),
+        Some(trace_matcher::Field::ResourceAttribute(path)) => Ok(TraceFieldExtraction {
+            field: TraceFieldSelector::from_resource_attribute(path),
+            synthesized_match: None,
+        }),
+        Some(trace_matcher::Field::ScopeAttribute(path)) => Ok(TraceFieldExtraction {
+            field: TraceFieldSelector::from_scope_attribute(path),
+            synthesized_match: None,
+        }),
+        Some(trace_matcher::Field::SpanKind(k)) => {
+            let kind = SpanKind::try_from(*k).unwrap_or(SpanKind::Unspecified);
+            Ok(TraceFieldExtraction {
+                field: TraceFieldSelector::SpanKind,
+                synthesized_match: Some(trace_matcher::Match::Exact(
+                    kind.as_str_name().to_string(),
+                )),
+            })
+        }
+        Some(trace_matcher::Field::SpanStatus(s)) => {
+            let status = SpanStatusCode::try_from(*s).unwrap_or(SpanStatusCode::Unspecified);
+            Ok(TraceFieldExtraction {
+                field: TraceFieldSelector::SpanStatus,
+                synthesized_match: Some(trace_matcher::Match::Exact(
+                    status.as_str_name().to_string(),
+                )),
+            })
+        }
+        Some(trace_matcher::Field::EventName(name)) => Ok(TraceFieldExtraction {
+            field: TraceFieldSelector::EventName,
+            synthesized_match: Some(trace_matcher::Match::Exact(name.clone())),
+        }),
+        Some(trace_matcher::Field::EventAttribute(path)) => Ok(TraceFieldExtraction {
+            field: TraceFieldSelector::from_event_attribute(path),
+            synthesized_match: None,
+        }),
+        Some(trace_matcher::Field::LinkTraceId(id)) => Ok(TraceFieldExtraction {
+            field: TraceFieldSelector::LinkTraceId,
+            synthesized_match: Some(trace_matcher::Match::Exact(id.clone())),
+        }),
+        None => Err(PolicyError::FieldError {
+            reason: "matcher has no field specified".to_string(),
+        }),
+    }
+}
+
+/// Compile trace keep from sampling config.
+///
+/// Maps `TraceSamplingConfig` percentage to a `CompiledKeep` variant for the
+/// standard keep/drop evaluation path.
+fn compile_trace_keep(config: Option<&TraceSamplingConfig>) -> CompiledKeep {
+    match config {
+        None => CompiledKeep::All,
+        Some(c) if c.percentage >= 100.0 => CompiledKeep::All,
+        Some(c) if c.percentage <= 0.0 => CompiledKeep::None,
+        Some(c) => CompiledKeep::Percentage(c.percentage as f64 / 100.0),
+    }
+}
+
+/// Compile trace sampling metadata from sampling config.
+///
+/// Produces a `CompiledTraceSampling` with precomputed 56-bit rejection
+/// threshold and encoding parameters for tracestate propagation.
+fn compile_trace_sampling(config: Option<&TraceSamplingConfig>) -> CompiledTraceSampling {
+    match config {
+        None => CompiledTraceSampling {
+            threshold: 0,
+            probability: 1.0,
+            precision: 4,
+            fail_closed: true,
+        },
+        Some(c) => {
+            let probability = (c.percentage as f64 / 100.0).clamp(0.0, 1.0);
+            let precision = c.sampling_precision.unwrap_or(4).clamp(1, 14);
+            CompiledTraceSampling {
+                threshold: super::rejection_threshold(probability),
+                probability,
+                precision,
+                fail_closed: c.fail_closed.unwrap_or(true),
+            }
+        }
     }
 }
 

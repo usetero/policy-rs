@@ -9,7 +9,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::Policy;
 use crate::engine::CompiledMatchers;
-use crate::engine::signal::{LogSignal, MetricSignal};
+use crate::engine::signal::{LogSignal, MetricSignal, TraceSignal};
 use crate::error::PolicyError;
 use crate::provider::PolicyProvider;
 
@@ -153,6 +153,8 @@ struct SnapshotInner {
     compiled_logs: Option<CompiledMatchers<LogSignal>>,
     /// Compiled matchers for metric policies.
     compiled_metrics: Option<CompiledMatchers<MetricSignal>>,
+    /// Compiled matchers for trace policies.
+    compiled_traces: Option<CompiledMatchers<TraceSignal>>,
 }
 
 impl PolicySnapshot {
@@ -164,6 +166,7 @@ impl PolicySnapshot {
                 index: HashMap::new(),
                 compiled_logs: None,
                 compiled_metrics: None,
+                compiled_traces: None,
             }),
         }
     }
@@ -204,6 +207,11 @@ impl PolicySnapshot {
     /// Get the compiled metric matchers for efficient evaluation.
     pub fn compiled_metric_matchers(&self) -> Option<&CompiledMatchers<MetricSignal>> {
         self.inner.compiled_metrics.as_ref()
+    }
+
+    /// Get the compiled trace matchers for efficient evaluation.
+    pub fn compiled_trace_matchers(&self) -> Option<&CompiledMatchers<TraceSignal>> {
+        self.inner.compiled_traces.as_ref()
     }
 }
 
@@ -299,6 +307,7 @@ impl RegistryInner {
         // Collect all policies with their stats, partitioned by signal type
         let mut log_policies: Vec<(Policy, Arc<PolicyStats>)> = Vec::new();
         let mut metric_policies: Vec<(Policy, Arc<PolicyStats>)> = Vec::new();
+        let mut trace_policies: Vec<(Policy, Arc<PolicyStats>)> = Vec::new();
 
         for (&provider_id, entries) in providers {
             for (policy, stats) in entries {
@@ -314,6 +323,8 @@ impl RegistryInner {
                     log_policies.push((policy.clone(), Arc::clone(stats)));
                 } else if policy.metric_target().is_some() {
                     metric_policies.push((policy.clone(), Arc::clone(stats)));
+                } else if policy.trace_target().is_some() {
+                    trace_policies.push((policy.clone(), Arc::clone(stats)));
                 }
             }
         }
@@ -344,12 +355,26 @@ impl RegistryInner {
             None
         };
 
+        // Compile trace matchers
+        let compiled_traces = if !trace_policies.is_empty() {
+            match CompiledMatchers::<TraceSignal>::build(trace_policies.into_iter()) {
+                Ok(matchers) => Some(matchers),
+                Err(e) => {
+                    eprintln!("Failed to compile trace policy matchers: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let new_snapshot = PolicySnapshot {
             inner: Arc::new(SnapshotInner {
                 policies,
                 index,
                 compiled_logs,
                 compiled_metrics,
+                compiled_traces,
             }),
         };
 

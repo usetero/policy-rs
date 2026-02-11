@@ -47,12 +47,12 @@ pub mod registry;
 
 pub use config::{ProviderConfig, register_providers};
 pub use engine::{
-    CompiledKeep, CompiledMatchers, CompiledPolicy, CompiledTransform, EvaluateResult, LogSignal,
-    MatchKey, Matchable, MetricSignal, PolicyEngine, RateLimiters, Signal, TransformOp,
-    Transformable,
+    CompiledKeep, CompiledMatchers, CompiledPolicy, CompiledTraceSampling, CompiledTransform,
+    EvaluateResult, LogSignal, MatchKey, Matchable, MetricSignal, PolicyEngine, RateLimiters,
+    Signal, TraceSignal, TransformOp, Transformable,
 };
 pub use error::PolicyError;
-pub use field::{LogFieldSelector, MetricFieldSelector};
+pub use field::{LogFieldSelector, MetricFieldSelector, TraceFieldSelector};
 pub use policy::Policy;
 pub use proto::opentelemetry::proto::common::v1 as otel_common;
 #[cfg(any(feature = "http", feature = "grpc"))]
