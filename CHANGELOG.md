@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.4.0](https://github.com/usetero/policy-rs/compare/v1.3.0...v1.4.0) (2026-02-11)
+
+
+### Features
+
+* metric support ([#33](https://github.com/usetero/policy-rs/issues/33)) ([cb3e41e](https://github.com/usetero/policy-rs/commit/cb3e41e5b4edf3c488096e88f51fb279bb41bc10))
+* tracing support ([#36](https://github.com/usetero/policy-rs/issues/36)) ([b6c7c44](https://github.com/usetero/policy-rs/commit/b6c7c4450e17e8eead1bdfa175193265ba2bbae3))
+
+
+### Bug Fixes
+
+* use the otel spec samplerate ([#35](https://github.com/usetero/policy-rs/issues/35)) ([50c76d8](https://github.com/usetero/policy-rs/commit/50c76d8518e0cd8348736ae6ddf02cb545b5eade))
+
 ## [1.3.0](https://github.com/usetero/policy-rs/compare/v1.2.0...v1.3.0) (2026-01-30)
 
 
