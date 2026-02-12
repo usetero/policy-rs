@@ -667,7 +667,7 @@ mod tests {
         assert_eq!(registry.provider_count(), 1);
 
         let snapshot = registry.snapshot();
-        assert_eq!(snapshot.len(), 6);
+        assert_eq!(snapshot.len(), 16);
 
         // Verify policies came from the correct provider
         for entry in snapshot.iter() {
@@ -691,17 +691,17 @@ mod tests {
         assert_ne!(id1, id2);
         assert_eq!(registry.provider_count(), 2);
 
-        // Each provider contributes its own policies, so we have 12 total
-        // (6 from each provider). The snapshot index will map each policy ID
-        // to the last occurrence, but all 12 entries are in the policies vec.
+        // Each provider contributes its own policies, so we have 32 total
+        // (16 from each provider). The snapshot index will map each policy ID
+        // to the last occurrence, but all 32 entries are in the policies vec.
         let snapshot = registry.snapshot();
-        assert_eq!(snapshot.len(), 12);
+        assert_eq!(snapshot.len(), 32);
 
         // Verify we have policies from both providers
         let provider1_count = snapshot.iter().filter(|e| e.provider_id == id1).count();
         let provider2_count = snapshot.iter().filter(|e| e.provider_id == id2).count();
-        assert_eq!(provider1_count, 6);
-        assert_eq!(provider2_count, 6);
+        assert_eq!(provider1_count, 16);
+        assert_eq!(provider2_count, 16);
     }
 
     #[test]
