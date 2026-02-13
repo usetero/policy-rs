@@ -24,9 +24,12 @@
 //! }
 //! ```
 
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+use notify::{EventKind, RecursiveMode, Watcher};
 use serde::Deserialize;
 
 use crate::error::PolicyError;
@@ -76,8 +79,116 @@ impl PolicyProvider for FileProvider {
     }
 
     fn subscribe(&self, callback: PolicyCallback) -> Result<(), PolicyError> {
-        let policies = self.load()?;
+        let contents = fs::read_to_string(&self.path).map_err(|e| PolicyError::FileRead {
+            path: self.path.clone(),
+            source: e,
+        })?;
+        let policies = self.parse(&contents)?;
+        let mut last_hash = hash_contents(&contents);
         callback(policies);
+
+        // If no tokio runtime is available, skip file watching (initial load still works).
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return Ok(());
+        };
+
+        // Resolve to absolute path so filename comparison works reliably.
+        let path = self
+            .path
+            .canonicalize()
+            .map_err(|e| PolicyError::FileRead {
+                path: self.path.clone(),
+                source: e,
+            })?;
+        let dir = path.parent().ok_or_else(|| PolicyError::FileWatch {
+            path: path.clone(),
+            message: "cannot determine parent directory".to_string(),
+        })?;
+
+        // Channel for forwarding notify events into the async task.
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+
+        let mut watcher = notify::recommended_watcher(move |res| {
+            let _ = tx.blocking_send(res);
+        })
+        .map_err(|e| PolicyError::FileWatch {
+            path: path.clone(),
+            message: e.to_string(),
+        })?;
+
+        watcher
+            .watch(dir, RecursiveMode::NonRecursive)
+            .map_err(|e| PolicyError::FileWatch {
+                path: path.clone(),
+                message: e.to_string(),
+            })?;
+
+        let watch_path = path.clone();
+        handle.spawn(async move {
+            // Keep watcher alive for the lifetime of this task.
+            let _watcher = watcher;
+
+            while let Some(event) = rx.recv().await {
+                let event = match event {
+                    Ok(e) => e,
+                    Err(e) => {
+                        eprintln!("file watcher error for {:?}: {}", watch_path, e);
+                        continue;
+                    }
+                };
+
+                // Only react to modifications and creates (covers atomic saves).
+                if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
+                    continue;
+                }
+
+                // Filter to events affecting our file.
+                let dominated = event
+                    .paths
+                    .iter()
+                    .any(|p| p.canonicalize().ok().as_deref() == Some(watch_path.as_path()));
+                if !dominated {
+                    continue;
+                }
+
+                // Read and deduplicate by content hash.
+                let contents = match fs::read_to_string(&watch_path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("file watcher read error for {:?}: {}", watch_path, e);
+                        continue;
+                    }
+                };
+                let h = hash_contents(&contents);
+                if h == last_hash {
+                    continue;
+                }
+                last_hash = h;
+
+                // Parse; log and skip on error (fail-open).
+                let file: JsonPolicyFile = match serde_json::from_str(&contents) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        eprintln!("file watcher parse error for {:?}: {}", watch_path, e);
+                        continue;
+                    }
+                };
+
+                let policies: Result<Vec<Policy>, _> = file
+                    .policies
+                    .into_iter()
+                    .map(|p| p.into_proto().map(|proto| Policy { proto }))
+                    .collect();
+
+                match policies {
+                    Ok(p) => callback(p),
+                    Err(e) => {
+                        eprintln!("file watcher policy error for {:?}: {}", watch_path, e);
+                    }
+                }
+            }
+        });
+
         Ok(())
     }
 }
@@ -617,6 +728,12 @@ fn parse_metric_field_name(policy_id: &str, name: &str) -> Result<pb::MetricFiel
             &format!("unknown metric_field: '{name}'"),
         )),
     }
+}
+
+fn hash_contents(contents: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    contents.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn invalid(policy_id: &str, reason: &str) -> PolicyError {
@@ -1521,5 +1638,164 @@ mod tests {
 
         assert_eq!(policies.len(), 1);
         assert!(policies[0].enabled());
+    }
+
+    // ==================== File Watch Tests ====================
+
+    fn one_policy_json(id: &str) -> String {
+        format!(
+            r#"{{
+                "policies": [{{
+                    "id": "{id}",
+                    "name": "{id}",
+                    "log": {{
+                        "match": [{{ "log_field": "body", "regex": ".*" }}],
+                        "keep": "none"
+                    }}
+                }}]
+            }}"#
+        )
+    }
+
+    fn two_policy_json() -> &'static str {
+        r#"{
+            "policies": [
+                {
+                    "id": "policy-a",
+                    "name": "policy-a",
+                    "log": {
+                        "match": [{ "log_field": "body", "regex": "a" }],
+                        "keep": "none"
+                    }
+                },
+                {
+                    "id": "policy-b",
+                    "name": "policy-b",
+                    "log": {
+                        "match": [{ "log_field": "body", "regex": "b" }],
+                        "keep": "all"
+                    }
+                }
+            ]
+        }"#
+    }
+
+    /// Wait for the callback log to reach the expected count, with a timeout.
+    async fn wait_for_callbacks(
+        log: &std::sync::Arc<std::sync::Mutex<Vec<Vec<String>>>>,
+        expected: usize,
+    ) {
+        for _ in 0..50 {
+            if log.lock().unwrap().len() >= expected {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        panic!(
+            "timed out waiting for {} callbacks, got {}",
+            expected,
+            log.lock().unwrap().len()
+        );
+    }
+
+    #[tokio::test]
+    async fn file_watch_reloads_on_change() {
+        use std::sync::{Arc, Mutex};
+
+        let file = create_temp_policy_file(&one_policy_json("initial"));
+        let provider = FileProvider::new(file.path());
+
+        // Collect callback invocations: each entry is the list of policy IDs.
+        let log: Arc<Mutex<Vec<Vec<String>>>> = Arc::new(Mutex::new(Vec::new()));
+        let log2 = log.clone();
+        let callback: PolicyCallback = Arc::new(move |policies| {
+            let ids: Vec<String> = policies.iter().map(|p| p.id().to_string()).collect();
+            log2.lock().unwrap().push(ids);
+        });
+
+        provider.subscribe(callback).unwrap();
+
+        // First callback fires immediately during subscribe.
+        assert_eq!(log.lock().unwrap().len(), 1);
+        assert_eq!(log.lock().unwrap()[0], vec!["initial"]);
+
+        // Modify the file — watcher should detect and reload.
+        std::fs::write(file.path(), two_policy_json()).unwrap();
+        wait_for_callbacks(&log, 2).await;
+
+        let entries = log.lock().unwrap();
+        assert_eq!(entries[1].len(), 2);
+        assert!(entries[1].contains(&"policy-a".to_string()));
+        assert!(entries[1].contains(&"policy-b".to_string()));
+    }
+
+    #[tokio::test]
+    async fn file_watch_skips_reload_on_identical_content() {
+        use std::sync::{Arc, Mutex};
+
+        let content = one_policy_json("unchanged");
+        let file = create_temp_policy_file(&content);
+        let provider = FileProvider::new(file.path());
+
+        let count: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+        let count2 = count.clone();
+        let callback: PolicyCallback = Arc::new(move |_| {
+            *count2.lock().unwrap() += 1;
+        });
+
+        provider.subscribe(callback).unwrap();
+        assert_eq!(*count.lock().unwrap(), 1);
+
+        // Write identical content — should not trigger a callback.
+        std::fs::write(file.path(), &content).unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        assert_eq!(*count.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn file_watch_survives_bad_reload() {
+        use std::sync::{Arc, Mutex};
+
+        // Start with valid content.
+        let file = create_temp_policy_file(&one_policy_json("good"));
+        let provider = FileProvider::new(file.path());
+
+        let log: Arc<Mutex<Vec<Vec<String>>>> = Arc::new(Mutex::new(Vec::new()));
+        let log2 = log.clone();
+        let callback: PolicyCallback = Arc::new(move |policies| {
+            let ids: Vec<String> = policies.iter().map(|p| p.id().to_string()).collect();
+            log2.lock().unwrap().push(ids);
+        });
+
+        provider.subscribe(callback).unwrap();
+        assert_eq!(log.lock().unwrap().len(), 1);
+        assert_eq!(log.lock().unwrap()[0], vec!["good"]);
+
+        // Write invalid JSON — watcher should log an error but not call back.
+        std::fs::write(file.path(), "{ broken json }").unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        assert_eq!(log.lock().unwrap().len(), 1); // still just the initial callback
+
+        // Write valid content again — watcher should recover and call back.
+        std::fs::write(file.path(), &one_policy_json("recovered")).unwrap();
+        wait_for_callbacks(&log, 2).await;
+
+        let entries = log.lock().unwrap();
+        assert_eq!(entries[1], vec!["recovered"]);
+    }
+
+    #[tokio::test]
+    async fn file_watch_initial_failure_does_not_subscribe() {
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.json");
+        let provider = FileProvider::new(&path);
+
+        let callback: PolicyCallback = Arc::new(|_| {});
+        let result = provider.subscribe(callback);
+
+        // subscribe should fail because the file doesn't exist.
+        assert!(result.is_err());
     }
 }
