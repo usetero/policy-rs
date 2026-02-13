@@ -6,6 +6,11 @@
 pub mod serde_helpers {
     use serde::{self, Deserialize, Deserializer, Serializer};
 
+    /// Returns true, used as serde default for Policy.enabled.
+    pub fn default_true() -> bool {
+        true
+    }
+
     /// Serialize u64 as a string (proto3 JSON format).
     pub fn serialize_u64_as_string<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -58,38 +63,54 @@ pub mod serde_helpers {
         }
     }
 
-    /// Module for SyncType enum serialization (proto3 JSON uses string names).
-    pub mod sync_type {
-        use super::super::tero::policy::v1::SyncType;
-        use serde::{self, Deserialize, Deserializer, Serializer};
+    /// Generates a serde module for a prost enum type that serializes as string
+    /// names and deserializes from both string names and integers.
+    macro_rules! proto_enum_serde {
+        ($mod_name:ident, $enum_type:ty) => {
+            pub mod $mod_name {
+                use serde::{self, Deserialize, Deserializer, Serializer};
 
-        pub fn serialize<S>(value: &i32, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            let enum_value = SyncType::try_from(*value).unwrap_or(SyncType::Unspecified);
-            serializer.serialize_str(enum_value.as_str_name())
-        }
+                pub fn serialize<S>(value: &i32, serializer: S) -> Result<S::Ok, S::Error>
+                where
+                    S: Serializer,
+                {
+                    let enum_value =
+                        <$enum_type>::try_from(*value).unwrap_or(<$enum_type>::Unspecified);
+                    serializer.serialize_str(enum_value.as_str_name())
+                }
 
-        pub fn deserialize<'de, D>(deserializer: D) -> Result<i32, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            #[derive(Deserialize)]
-            #[serde(untagged)]
-            enum StringOrInt {
-                String(String),
-                Int(i32),
+                pub fn deserialize<'de, D>(deserializer: D) -> Result<i32, D::Error>
+                where
+                    D: Deserializer<'de>,
+                {
+                    #[derive(Deserialize)]
+                    #[serde(untagged)]
+                    enum StringOrInt {
+                        String(String),
+                        Int(i32),
+                    }
+
+                    match StringOrInt::deserialize(deserializer)? {
+                        StringOrInt::String(s) => <$enum_type>::from_str_name(&s)
+                            .map(|v| v as i32)
+                            .ok_or_else(|| {
+                                serde::de::Error::custom(format!(
+                                    "unknown {}: {}",
+                                    stringify!($enum_type),
+                                    s
+                                ))
+                            }),
+                        StringOrInt::Int(n) => Ok(n),
+                    }
+                }
             }
-
-            match StringOrInt::deserialize(deserializer)? {
-                StringOrInt::String(s) => SyncType::from_str_name(&s)
-                    .map(|v| v as i32)
-                    .ok_or_else(|| serde::de::Error::custom(format!("unknown SyncType: {}", s))),
-                StringOrInt::Int(n) => Ok(n),
-            }
-        }
+        };
     }
+
+    // Only SyncType is currently used as a standalone enum field with serde.
+    // Enum fields inside oneofs (LogField, MetricField, etc.) use i32 encoding
+    // because tonic-build cannot add per-variant serde attributes on oneof enums.
+    proto_enum_serde!(sync_type, crate::proto::tero::policy::v1::SyncType);
 
     /// Module for AttributePath deserialization supporting three forms:
     /// 1. Canonical: `{ "path": ["http", "method"] }`

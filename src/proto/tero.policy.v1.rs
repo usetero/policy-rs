@@ -132,9 +132,11 @@ pub mod log_sample_key {
 pub struct LogMatcher {
     /// If true, inverts the match result
     #[prost(bool, tag = "20")]
+    #[serde(default)]
     pub negate: bool,
     /// If true, applies case-insensitive matching to all match types
     #[prost(bool, tag = "21")]
+    #[serde(default)]
     pub case_insensitive: bool,
     /// FIELD SELECTION (keep in sync with LogRedact, LogRename, LogAdd, LogRemove)
     /// The field to match against. Exactly one must be set.
@@ -428,9 +430,11 @@ pub struct MetricTarget {
 pub struct MetricMatcher {
     /// If true, inverts the match result
     #[prost(bool, tag = "20")]
+    #[serde(default)]
     pub negate: bool,
     /// If true, applies case-insensitive matching to all match types
     #[prost(bool, tag = "21")]
+    #[serde(default)]
     pub case_insensitive: bool,
     /// FIELD SELECTION
     /// The field to match against. Exactly one must be set.
@@ -647,9 +651,11 @@ pub struct TraceTarget {
 pub struct TraceMatcher {
     /// If true, inverts the match result
     #[prost(bool, tag = "20")]
+    #[serde(default)]
     pub negate: bool,
     /// If true, applies case-insensitive matching to all match types
     #[prost(bool, tag = "21")]
+    #[serde(default)]
     pub case_insensitive: bool,
     /// FIELD SELECTION
     /// The field to match against. Exactly one must be set.
@@ -963,12 +969,15 @@ pub struct Policy {
     pub name: ::prost::alloc::string::String,
     /// Optional description
     #[prost(string, tag = "3")]
+    #[serde(default)]
     pub description: ::prost::alloc::string::String,
     /// Whether this policy is enabled
     #[prost(bool, tag = "4")]
+    #[serde(default = "crate::proto::serde_helpers::default_true")]
     pub enabled: bool,
     /// Timestamp when this policy was created (Unix epoch nanoseconds)
     #[prost(fixed64, tag = "5")]
+    #[serde(default)]
     #[serde(
         serialize_with = "crate::proto::serde_helpers::serialize_u64_as_string",
         deserialize_with = "crate::proto::serde_helpers::deserialize_u64_from_string"
@@ -976,6 +985,7 @@ pub struct Policy {
     pub created_at_unix_nano: u64,
     /// Timestamp when this policy was last modified (Unix epoch nanoseconds)
     #[prost(fixed64, tag = "6")]
+    #[serde(default)]
     #[serde(
         serialize_with = "crate::proto::serde_helpers::serialize_u64_as_string",
         deserialize_with = "crate::proto::serde_helpers::deserialize_u64_from_string"
@@ -983,6 +993,7 @@ pub struct Policy {
     pub modified_at_unix_nano: u64,
     /// Labels for metadata and routing
     #[prost(message, repeated, tag = "7")]
+    #[serde(default)]
     pub labels: ::prost::alloc::vec::Vec<
         super::super::super::opentelemetry::proto::common::v1::KeyValue,
     >,

@@ -29,6 +29,9 @@ pub enum PolicyError {
     /// Failed to compile Hyperscan database
     CompileError { reason: String },
 
+    /// File watch error
+    FileWatch { path: PathBuf, message: String },
+
     /// HTTP provider error
     HttpError(String),
 
@@ -59,6 +62,9 @@ impl std::fmt::Display for PolicyError {
             }
             PolicyError::CompileError { reason } => {
                 write!(f, "failed to compile Hyperscan database: {}", reason)
+            }
+            PolicyError::FileWatch { path, message } => {
+                write!(f, "failed to watch policy file {:?}: {}", path, message)
             }
             PolicyError::HttpError(msg) => {
                 write!(f, "HTTP provider error: {}", msg)
