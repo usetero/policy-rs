@@ -324,9 +324,9 @@ enum JsonMetricField {
     DatapointAttribute(JsonAttributePath),
     ResourceAttribute(JsonAttributePath),
     ScopeAttribute(JsonAttributePath),
-    /// Full proto name, e.g. `"METRIC_TYPE_GAUGE"`.
+    /// Full proto name (e.g. `"METRIC_TYPE_GAUGE"`) or shorthand (e.g. `"gauge"`).
     MetricType(String),
-    /// Full proto name, e.g. `"AGGREGATION_TEMPORALITY_DELTA"`.
+    /// Full proto name (e.g. `"AGGREGATION_TEMPORALITY_DELTA"`) or shorthand (e.g. `"delta"`).
     AggregationTemporality(String),
 }
 
@@ -555,16 +555,25 @@ impl JsonMetricField {
             }
             Self::MetricType(name) => {
                 let mt = pb::MetricType::from_str_name(&name)
+                    .or_else(|| {
+                        let canonical = format!("METRIC_TYPE_{}", name.to_uppercase());
+                        pb::MetricType::from_str_name(&canonical)
+                    })
                     .ok_or_else(|| invalid(policy_id, &format!("unknown metric_type: '{name}'")))?;
                 Ok(metric_matcher::Field::MetricType(mt as i32))
             }
             Self::AggregationTemporality(name) => {
-                let at = pb::AggregationTemporality::from_str_name(&name).ok_or_else(|| {
-                    invalid(
-                        policy_id,
-                        &format!("unknown aggregation_temporality: '{name}'"),
-                    )
-                })?;
+                let at = pb::AggregationTemporality::from_str_name(&name)
+                    .or_else(|| {
+                        let canonical = format!("AGGREGATION_TEMPORALITY_{}", name.to_uppercase());
+                        pb::AggregationTemporality::from_str_name(&canonical)
+                    })
+                    .ok_or_else(|| {
+                        invalid(
+                            policy_id,
+                            &format!("unknown aggregation_temporality: '{name}'"),
+                        )
+                    })?;
                 Ok(metric_matcher::Field::AggregationTemporality(at as i32))
             }
         }
@@ -1797,5 +1806,125 @@ mod tests {
 
         // subscribe should fail because the file doesn't exist.
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_metric_policy_with_metric_type_shorthand() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "match-gauge",
+                    "name": "Match Gauge Metrics",
+                    "metric": {
+                        "match": [
+                            { "metric_type": "gauge", "exists": true }
+                        ],
+                        "keep": false
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        assert_eq!(policies.len(), 1);
+        let metric_target = policies[0].metric_target().unwrap();
+        assert_eq!(metric_target.r#match.len(), 1);
+        assert!(matches!(
+            metric_target.r#match[0].field,
+            Some(metric_matcher::Field::MetricType(v)) if v == pb::MetricType::Gauge as i32
+        ));
+    }
+
+    #[test]
+    fn load_metric_policy_with_metric_type_full_name() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "match-gauge-full",
+                    "name": "Match Gauge Metrics Full Name",
+                    "metric": {
+                        "match": [
+                            { "metric_type": "METRIC_TYPE_GAUGE", "exists": true }
+                        ],
+                        "keep": false
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        assert_eq!(policies.len(), 1);
+        let metric_target = policies[0].metric_target().unwrap();
+        assert_eq!(metric_target.r#match.len(), 1);
+        assert!(matches!(
+            metric_target.r#match[0].field,
+            Some(metric_matcher::Field::MetricType(v)) if v == pb::MetricType::Gauge as i32
+        ));
+    }
+
+    #[test]
+    fn load_metric_policy_with_aggregation_temporality_shorthand() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "match-delta",
+                    "name": "Match Delta Temporality",
+                    "metric": {
+                        "match": [
+                            { "aggregation_temporality": "delta", "exists": true }
+                        ],
+                        "keep": false
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        assert_eq!(policies.len(), 1);
+        let metric_target = policies[0].metric_target().unwrap();
+        assert_eq!(metric_target.r#match.len(), 1);
+        assert!(matches!(
+            metric_target.r#match[0].field,
+            Some(metric_matcher::Field::AggregationTemporality(v)) if v == pb::AggregationTemporality::Delta as i32
+        ));
+    }
+
+    #[test]
+    fn load_metric_policy_with_aggregation_temporality_full_name() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "match-delta-full",
+                    "name": "Match Delta Temporality Full Name",
+                    "metric": {
+                        "match": [
+                            { "aggregation_temporality": "AGGREGATION_TEMPORALITY_DELTA", "exists": true }
+                        ],
+                        "keep": false
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        assert_eq!(policies.len(), 1);
+        let metric_target = policies[0].metric_target().unwrap();
+        assert_eq!(metric_target.r#match.len(), 1);
+        assert!(matches!(
+            metric_target.r#match[0].field,
+            Some(metric_matcher::Field::AggregationTemporality(v)) if v == pb::AggregationTemporality::Delta as i32
+        ));
     }
 }
