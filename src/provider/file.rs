@@ -306,8 +306,10 @@ struct JsonMetricTarget {
 struct JsonMetricMatcher {
     #[serde(flatten)]
     field: JsonMetricField,
+    /// Optional when `field` is an enum field (`metric_type` or
+    /// `aggregation_temporality`) — defaults to `exists: true`.
     #[serde(flatten)]
-    match_type: JsonMatchType,
+    match_type: Option<JsonMatchType>,
     #[serde(default)]
     negate: bool,
     #[serde(default)]
@@ -344,8 +346,10 @@ struct JsonTraceTarget {
 struct JsonTraceMatcher {
     #[serde(flatten)]
     field: JsonTraceField,
+    /// Optional when `field` is an enum field (`span_kind` or `span_status`)
+    /// — defaults to `exists: true`.
     #[serde(flatten)]
-    match_type: JsonMatchType,
+    match_type: Option<JsonMatchType>,
     #[serde(default)]
     negate: bool,
     #[serde(default)]
@@ -528,9 +532,10 @@ impl JsonMetricTarget {
 
 impl JsonMetricMatcher {
     fn into_proto(self, policy_id: &str) -> Result<pb::MetricMatcher, PolicyError> {
+        let match_type = self.match_type.unwrap_or(JsonMatchType::Exists(true));
         Ok(pb::MetricMatcher {
             field: Some(self.field.into_proto(policy_id)?),
-            r#match: Some(self.match_type.into_metric_match()),
+            r#match: Some(match_type.into_metric_match()),
             negate: self.negate,
             case_insensitive: self.case_insensitive,
         })
@@ -596,9 +601,10 @@ impl JsonTraceTarget {
 
 impl JsonTraceMatcher {
     fn into_proto(self, policy_id: &str) -> Result<pb::TraceMatcher, PolicyError> {
+        let match_type = self.match_type.unwrap_or(JsonMatchType::Exists(true));
         Ok(pb::TraceMatcher {
             field: Some(self.field.into_proto(policy_id)?),
-            r#match: Some(self.match_type.into_trace_match()),
+            r#match: Some(match_type.into_trace_match()),
             negate: self.negate,
             case_insensitive: self.case_insensitive,
         })
@@ -1817,7 +1823,7 @@ mod tests {
                     "name": "Match Gauge Metrics",
                     "metric": {
                         "match": [
-                            { "metric_type": "gauge", "exists": true }
+                            { "metric_type": "gauge" }
                         ],
                         "keep": false
                     }
@@ -1847,7 +1853,7 @@ mod tests {
                     "name": "Match Gauge Metrics Full Name",
                     "metric": {
                         "match": [
-                            { "metric_type": "METRIC_TYPE_GAUGE", "exists": true }
+                            { "metric_type": "METRIC_TYPE_GAUGE" }
                         ],
                         "keep": false
                     }
@@ -1877,7 +1883,7 @@ mod tests {
                     "name": "Match Delta Temporality",
                     "metric": {
                         "match": [
-                            { "aggregation_temporality": "delta", "exists": true }
+                            { "aggregation_temporality": "delta" }
                         ],
                         "keep": false
                     }
@@ -1907,7 +1913,7 @@ mod tests {
                     "name": "Match Delta Temporality Full Name",
                     "metric": {
                         "match": [
-                            { "aggregation_temporality": "AGGREGATION_TEMPORALITY_DELTA", "exists": true }
+                            { "aggregation_temporality": "AGGREGATION_TEMPORALITY_DELTA" }
                         ],
                         "keep": false
                     }
