@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.2](https://github.com/usetero/policy-rs/compare/v1.4.1...v1.4.2) (2026-02-16)
+
+
+### Bug Fixes
+
+* assume matcher for enum values ([#40](https://github.com/usetero/policy-rs/issues/40)) ([82822c5](https://github.com/usetero/policy-rs/commit/82822c58edecdddd11d2109fb007b317745eb277))
+
 ## [1.4.1](https://github.com/usetero/policy-rs/compare/v1.4.0...v1.4.1) (2026-02-16)
 
 
