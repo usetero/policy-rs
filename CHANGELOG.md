@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.1](https://github.com/usetero/policy-rs/compare/v1.4.0...v1.4.1) (2026-02-16)
+
+
+### Bug Fixes
+
+* accept both formats ([#39](https://github.com/usetero/policy-rs/issues/39)) ([f378ffe](https://github.com/usetero/policy-rs/commit/f378ffe9bab2088c71f9fbc87f135d23d16c4dbc))
+* migrate policy rs json parser to proto based format ([#37](https://github.com/usetero/policy-rs/issues/37)) ([9eb5e4b](https://github.com/usetero/policy-rs/commit/9eb5e4b1140f1e06b7a11a3f5741a21e299b92ad))
+
 ## [1.4.0](https://github.com/usetero/policy-rs/compare/v1.3.0...v1.4.0) (2026-02-11)
 
 
