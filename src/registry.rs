@@ -735,4 +735,60 @@ mod tests {
         assert!(registry.snapshot().is_empty());
         assert_eq!(registry.provider_count(), 0);
     }
+
+    #[test]
+    fn subscribe_auto_wires_stats_collector() {
+        use crate::provider::{PolicyCallback, PolicyProvider, StatsCollector};
+        use std::sync::RwLock;
+
+        /// A test provider that captures the stats collector set by the registry.
+        struct SpyProvider {
+            policies: Vec<Policy>,
+            collector: RwLock<Option<StatsCollector>>,
+        }
+
+        impl PolicyProvider for SpyProvider {
+            fn set_stats_collector(&self, collector: StatsCollector) {
+                *self.collector.write().unwrap() = Some(collector);
+            }
+
+            fn subscribe(&self, callback: PolicyCallback) -> Result<(), PolicyError> {
+                callback(self.policies.clone());
+                Ok(())
+            }
+        }
+
+        let provider = SpyProvider {
+            policies: vec![make_policy("policy-1"), make_policy("policy-2")],
+            collector: RwLock::new(None),
+        };
+
+        let registry = PolicyRegistry::new();
+        registry.subscribe(&provider).unwrap();
+
+        // Verify the collector was set
+        let collector = provider.collector.read().unwrap();
+        assert!(collector.is_some(), "stats collector should be auto-wired");
+
+        // Record some stats
+        let snapshot = registry.snapshot();
+        let entry = snapshot.get("policy-1").unwrap();
+        entry.stats.record_hit();
+        entry.stats.record_hit();
+        entry.stats.record_miss();
+
+        // Call the collector and verify it returns the stats
+        let stats = collector.as_ref().unwrap()();
+        assert_eq!(stats.len(), 2);
+
+        let p1_stats = stats.iter().find(|(id, _)| id == "policy-1").unwrap();
+        assert_eq!(p1_stats.1.match_hits, 2);
+        assert_eq!(p1_stats.1.match_misses, 1);
+
+        // Stats should be reset after collection
+        let stats_again = collector.as_ref().unwrap()();
+        let p1_again = stats_again.iter().find(|(id, _)| id == "policy-1").unwrap();
+        assert_eq!(p1_again.1.match_hits, 0);
+        assert_eq!(p1_again.1.match_misses, 0);
+    }
 }
