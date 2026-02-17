@@ -16,8 +16,8 @@ use crate::error::PolicyError;
 use crate::policy::Policy;
 use crate::proto::tero::policy::v1::{ClientMetadata, SyncRequest, SyncResponse};
 
-use super::sync::{StatsCollector, collect_policy_statuses};
-use super::{PolicyCallback, PolicyProvider};
+use super::sync::collect_policy_statuses;
+use super::{PolicyCallback, PolicyProvider, StatsCollector};
 
 /// Configuration for the HTTP provider.
 #[derive(Debug, Clone)]
@@ -153,14 +153,6 @@ impl HttpProvider {
     /// This performs a one-shot async fetch and returns the current policies.
     pub async fn load(&self) -> Result<Vec<Policy>, PolicyError> {
         self.sync(true).await
-    }
-
-    /// Set the stats collector for reporting policy statistics.
-    ///
-    /// The collector function is called before each sync to gather
-    /// current policy statistics, which are included in the SyncRequest.
-    pub fn set_stats_collector(&self, collector: StatsCollector) {
-        *self.stats_collector.write().unwrap() = Some(collector);
     }
 
     /// Build a sync request with current state.
@@ -424,6 +416,10 @@ impl HttpProvider {
 }
 
 impl PolicyProvider for HttpProvider {
+    fn set_stats_collector(&self, collector: StatsCollector) {
+        *self.stats_collector.write().unwrap() = Some(collector);
+    }
+
     fn subscribe(&self, callback: PolicyCallback) -> Result<(), PolicyError> {
         // Use cached policies from new_with_initial_fetch()
         let policies = self

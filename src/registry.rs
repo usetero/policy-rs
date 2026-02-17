@@ -11,7 +11,7 @@ use crate::Policy;
 use crate::engine::CompiledMatchers;
 use crate::engine::signal::{LogSignal, MetricSignal, TraceSignal};
 use crate::error::PolicyError;
-use crate::provider::PolicyProvider;
+use crate::provider::{PolicyProvider, StatsCollector};
 
 /// Unique identifier for a registered provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -430,6 +430,17 @@ impl PolicyRegistry {
     pub fn subscribe(&self, provider: &dyn PolicyProvider) -> Result<ProviderId, PolicyError> {
         let handle = self.register_provider();
         let provider_id = handle.provider_id();
+
+        // Wire up stats collection so providers can report policy statistics
+        let inner = Arc::clone(&self.inner);
+        let collector: StatsCollector = Arc::new(move || {
+            let snapshot = inner.snapshot();
+            snapshot
+                .iter()
+                .map(|entry| (entry.policy.id().to_string(), entry.stats.reset_all()))
+                .collect()
+        });
+        provider.set_stats_collector(collector);
 
         // Create a callback that updates the registry
         let callback = {

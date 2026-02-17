@@ -55,7 +55,6 @@ pub use error::PolicyError;
 pub use field::{LogFieldSelector, MetricFieldSelector, TraceFieldSelector};
 pub use policy::Policy;
 pub use proto::opentelemetry::proto::common::v1 as otel_common;
-#[cfg(any(feature = "http", feature = "grpc"))]
 pub use provider::StatsCollector;
 #[cfg(feature = "http")]
 pub use provider::{ContentType, HttpProvider, HttpProviderConfig};
