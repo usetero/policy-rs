@@ -13,16 +13,18 @@ pub use file::FileProvider;
 pub use grpc::{GrpcProvider, GrpcProviderConfig};
 #[cfg(feature = "http")]
 pub use http::{ContentType, HttpProvider, HttpProviderConfig};
-#[cfg(any(feature = "http", feature = "grpc"))]
-pub use sync::StatsCollector;
-
 use std::sync::Arc;
 
 use crate::error::PolicyError;
 use crate::policy::Policy;
+use crate::registry::PolicyStatsSnapshot;
 
 /// Callback type for policy updates.
 pub type PolicyCallback = Arc<dyn Fn(Vec<Policy>) + Send + Sync>;
+
+/// Stats collector function type.
+/// Returns a list of policy IDs with their stats snapshots.
+pub type StatsCollector = Arc<dyn Fn() -> Vec<(String, PolicyStatsSnapshot)> + Send + Sync>;
 
 /// Trait for policy providers.
 ///
@@ -37,4 +39,10 @@ pub trait PolicyProvider: Send + Sync {
     ///
     /// Returns an error if the initial load fails.
     fn subscribe(&self, callback: PolicyCallback) -> Result<(), PolicyError>;
+
+    /// Set a stats collector for reporting policy statistics back to the server.
+    ///
+    /// Called automatically by [`PolicyRegistry::subscribe()`]. Providers that
+    /// report stats (HTTP, gRPC) should override this; the default is a no-op.
+    fn set_stats_collector(&self, _collector: StatsCollector) {}
 }

@@ -1,13 +1,9 @@
 //! Shared sync utilities for HTTP and gRPC providers.
 
-use std::sync::Arc;
-
 use crate::proto::tero::policy::v1::{PolicySyncStatus, TransformStageStatus};
 use crate::registry::PolicyStatsSnapshot;
 
-/// Stats collector function type.
-/// Returns a list of policy IDs with their stats snapshots.
-pub type StatsCollector = Arc<dyn Fn() -> Vec<(String, PolicyStatsSnapshot)> + Send + Sync>;
+use super::StatsCollector;
 
 /// Convert a PolicyStatsSnapshot to a PolicySyncStatus for reporting.
 pub fn stats_to_sync_status(id: String, stats: PolicyStatsSnapshot) -> PolicySyncStatus {
