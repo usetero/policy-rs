@@ -53,6 +53,18 @@ impl FileProvider {
         }
     }
 
+    /// Load policies from the file.
+    ///
+    /// This performs a one-shot synchronous read and returns the current policies.
+    pub fn load(&self) -> Result<Vec<Policy>, PolicyError> {
+        let contents = fs::read_to_string(&self.path).map_err(|e| PolicyError::FileRead {
+            path: self.path.clone(),
+            source: e,
+        })?;
+
+        self.parse(&contents)
+    }
+
     /// Parse policies from file contents.
     fn parse(&self, contents: &str) -> Result<Vec<Policy>, PolicyError> {
         let file: JsonPolicyFile =
@@ -69,15 +81,6 @@ impl FileProvider {
 }
 
 impl PolicyProvider for FileProvider {
-    fn load(&self) -> Result<Vec<Policy>, PolicyError> {
-        let contents = fs::read_to_string(&self.path).map_err(|e| PolicyError::FileRead {
-            path: self.path.clone(),
-            source: e,
-        })?;
-
-        self.parse(&contents)
-    }
-
     fn subscribe(&self, callback: PolicyCallback) -> Result<(), PolicyError> {
         let contents = fs::read_to_string(&self.path).map_err(|e| PolicyError::FileRead {
             path: self.path.clone(),

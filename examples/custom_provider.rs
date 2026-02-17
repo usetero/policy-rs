@@ -97,7 +97,7 @@ impl ApiPolicyProvider {
     }
 }
 
-impl PolicyProvider for ApiPolicyProvider {
+impl ApiPolicyProvider {
     fn load(&self) -> Result<Vec<Policy>, PolicyError> {
         let policies = self.fetch_from_api()?;
 
@@ -107,7 +107,9 @@ impl PolicyProvider for ApiPolicyProvider {
 
         Ok(policies)
     }
+}
 
+impl PolicyProvider for ApiPolicyProvider {
     fn subscribe(&self, callback: PolicyCallback) -> Result<(), PolicyError> {
         // Load initial policies
         let policies = self.load()?;

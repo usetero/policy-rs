@@ -148,11 +148,10 @@ impl HttpProvider {
         Ok(provider)
     }
 
-    /// Fetch policies from the HTTP endpoint.
+    /// Load policies from the HTTP endpoint.
     ///
-    /// This is an async method that can be used to manually trigger a sync.
-    /// Returns the fetched policies.
-    pub async fn fetch_policies(&self) -> Result<Vec<Policy>, PolicyError> {
+    /// This performs a one-shot async fetch and returns the current policies.
+    pub async fn load(&self) -> Result<Vec<Policy>, PolicyError> {
         self.sync(true).await
     }
 
@@ -425,23 +424,14 @@ impl HttpProvider {
 }
 
 impl PolicyProvider for HttpProvider {
-    fn load(&self) -> Result<Vec<Policy>, PolicyError> {
-        // Use tokio runtime to run the async sync
-        let rt = tokio::runtime::Handle::try_current()
-            .map_err(|_| PolicyError::HttpError("No tokio runtime available".to_string()))?;
-
-        rt.block_on(self.sync(true))
-    }
-
     fn subscribe(&self, callback: PolicyCallback) -> Result<(), PolicyError> {
-        // Use cached policies from async init if available, otherwise do a blocking load
+        // Use cached policies from new_with_initial_fetch()
         let policies = self
             .initial_policies
             .write()
             .unwrap()
             .take()
-            .map(Ok)
-            .unwrap_or_else(|| self.load())?;
+            .expect("HttpProvider::subscribe() requires new_with_initial_fetch()");
         callback(policies);
 
         // Get the initial hash to track changes

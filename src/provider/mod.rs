@@ -26,13 +26,9 @@ pub type PolicyCallback = Arc<dyn Fn(Vec<Policy>) + Send + Sync>;
 
 /// Trait for policy providers.
 ///
-/// Providers load policies and notify subscribers when policies change.
+/// Providers notify subscribers when policies change. For one-shot loading,
+/// use the `load()` method on the concrete provider type directly.
 pub trait PolicyProvider: Send + Sync {
-    /// Load policies from the provider.
-    ///
-    /// This performs an immediate load and returns the current policies.
-    fn load(&self) -> Result<Vec<Policy>, PolicyError>;
-
     /// Subscribe to policy updates.
     ///
     /// The callback will be invoked whenever the provider detects policy changes.
