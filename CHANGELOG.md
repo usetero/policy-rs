@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.3](https://github.com/usetero/policy-rs/compare/v1.4.2...v1.4.3) (2026-02-17)
+
+
+### Bug Fixes
+
+* load should be per-provider and for testing ([#42](https://github.com/usetero/policy-rs/issues/42)) ([2b0450f](https://github.com/usetero/policy-rs/commit/2b0450feae6c6f1cb3d0dcf78ecdce6eebdb91a2))
+
 ## [1.4.2](https://github.com/usetero/policy-rs/compare/v1.4.1...v1.4.2) (2026-02-16)
 
 
