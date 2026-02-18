@@ -587,9 +587,6 @@ mod tests {
         // The "missing" attribute must NOT be created
         assert!(!log.attributes.contains_key("missing"));
         // Existing attributes must be unchanged
-        assert_eq!(
-            log.attributes.get("existing"),
-            Some(&"keep-me".to_string())
-        );
+        assert_eq!(log.attributes.get("existing"), Some(&"keep-me".to_string()));
     }
 }
