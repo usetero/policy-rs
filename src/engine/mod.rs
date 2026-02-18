@@ -108,7 +108,15 @@ impl PolicyEngine {
             .as_ref()
             .and_then(|key| log.get_field(key));
 
-        Ok(self.apply_keep(&winner.id, &winner.keep, false, sample_key_value.as_deref()))
+        let result = self.apply_keep(&winner.id, &winner.keep, false, sample_key_value.as_deref());
+        let will_keep = matches!(
+            &result,
+            EvaluateResult::Keep { .. }
+                | EvaluateResult::Sample { keep: true, .. }
+                | EvaluateResult::RateLimit { allowed: true, .. }
+        );
+        record_match_stats(compiled, &matching, will_keep);
+        Ok(result)
     }
 
     /// Evaluate a telemetry record and apply transforms from all matching policies.
@@ -158,6 +166,9 @@ impl PolicyEngine {
                     .check(&winner.id, *limit, Duration::from_secs(60))
             }
         };
+
+        // Record match hit/miss stats based on outcome
+        record_match_stats(compiled, &matching, will_keep);
 
         // Only apply transforms if the log is being kept
         let transformed = if will_keep {
@@ -286,6 +297,7 @@ impl PolicyEngine {
             Some(ts) => ts,
             None => {
                 // No sampling config — treat as keep all
+                record_match_stats(compiled, &matching, true);
                 return Ok(EvaluateResult::Keep {
                     policy_id: winner.id.clone(),
                     transformed: false,
@@ -296,6 +308,7 @@ impl PolicyEngine {
         // Short-circuit for 100% and 0%
         match &winner.keep {
             CompiledKeep::None => {
+                record_match_stats(compiled, &matching, false);
                 return Ok(EvaluateResult::Drop {
                     policy_id: winner.id.clone(),
                 });
@@ -307,6 +320,7 @@ impl PolicyEngine {
                     &encode_threshold(0, trace_sampling.precision),
                     true,
                 );
+                record_match_stats(compiled, &matching, true);
                 return Ok(EvaluateResult::Keep {
                     policy_id: winner.id.clone(),
                     transformed: true,
@@ -331,6 +345,7 @@ impl PolicyEngine {
                     );
                 }
 
+                record_match_stats(compiled, &matching, keep);
                 Ok(EvaluateResult::Sample {
                     policy_id: winner.id.clone(),
                     percentage: trace_sampling.probability * 100.0,
@@ -340,6 +355,8 @@ impl PolicyEngine {
             }
             None => {
                 // No randomness available — respect fail_closed setting
+                let will_keep = !trace_sampling.fail_closed;
+                record_match_stats(compiled, &matching, will_keep);
                 if trace_sampling.fail_closed {
                     Ok(EvaluateResult::Drop {
                         policy_id: winner.id.clone(),
@@ -365,7 +382,8 @@ impl Default for PolicyEngine {
 /// Find matching policies by scanning Vectorscan databases and checking existence.
 ///
 /// Returns the matching policy indices sorted by restrictiveness (most restrictive first),
-/// or `None` if no policies match. Also records hit/miss stats on each policy.
+/// or `None` if no policies match. Does NOT record match stats — callers must call
+/// `record_match_stats` after determining the keep outcome.
 /// NOTE: Later we will need to iterate over all the policies for transforms on keep decisions.
 fn find_matching_policies<S: Signal>(
     compiled: &CompiledMatchers<S>,
@@ -417,21 +435,17 @@ fn find_matching_policies<S: Signal>(
         }
     }
 
-    // Find matching policies
+    // Find matching policies (stats are recorded later, after the keep decision)
     let mut matching: Vec<usize> = Vec::new();
     for (idx, policy) in compiled.policies.iter().enumerate() {
         if !policy.enabled {
             continue;
         }
         if disqualified[idx] {
-            policy.stats.record_miss();
             continue;
         }
         if match_counts[idx] == policy.required_match_count {
-            policy.stats.record_hit();
             matching.push(idx);
-        } else {
-            policy.stats.record_miss();
         }
     }
 
@@ -448,6 +462,30 @@ fn find_matching_policies<S: Signal>(
     });
 
     Ok(Some(matching))
+}
+
+/// Record match hit/miss stats based on the final keep outcome.
+///
+/// Per spec:
+/// - If kept: all matching policies record a hit.
+/// - If dropped: the winner (matching[0], most restrictive) records a hit;
+///   all other matching policies record a miss.
+/// - Non-matching policies: no counter change.
+fn record_match_stats<S: Signal>(
+    compiled: &CompiledMatchers<S>,
+    matching: &[usize],
+    will_keep: bool,
+) {
+    if will_keep {
+        for &idx in matching {
+            compiled.policies[idx].stats.record_hit();
+        }
+    } else {
+        compiled.policies[matching[0]].stats.record_hit();
+        for &idx in &matching[1..] {
+            compiled.policies[idx].stats.record_miss();
+        }
+    }
 }
 
 /// Maximum threshold value: 2^56.
@@ -1432,14 +1470,130 @@ mod tests {
         let log1 = TestLog::new().with_body("error occurred");
         engine.evaluate(&snapshot, &log1).await.unwrap();
 
-        // Non-matching log - should record miss
+        // Non-matching log - per spec, no counter change (matchers didn't fire)
         let log2 = TestLog::new().with_body("info message");
         engine.evaluate(&snapshot, &log2).await.unwrap();
 
-        // Check stats
+        // Check stats: 1 hit from the match, 0 misses (non-match = no counter change)
         let entry = snapshot.get("stats-test").unwrap();
         assert_eq!(entry.stats.hits(), 1);
-        assert_eq!(entry.stats.misses(), 1);
+        assert_eq!(entry.stats.misses(), 0);
+    }
+
+    #[tokio::test]
+    async fn evaluate_stats_drop_overrides_keep() {
+        // Spec example: keep-all policy matched but drop-all wins → keep-all gets miss
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy_keep = make_policy(
+            "keep-info",
+            vec![body_regex_matcher("health", false)],
+            "all",
+            true,
+        );
+        let policy_drop = make_policy(
+            "drop-health",
+            vec![body_regex_matcher("health", false)],
+            "none",
+            true,
+        );
+        handle.update(vec![policy_keep, policy_drop]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Both policies match, but drop-health wins (more restrictive)
+        let log = TestLog::new().with_body("health check ok");
+        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        assert_eq!(
+            result,
+            EvaluateResult::Drop {
+                policy_id: "drop-health".to_string()
+            }
+        );
+
+        // drop-health: hit (winner, outcome matches its intent)
+        let drop_entry = snapshot.get("drop-health").unwrap();
+        assert_eq!(drop_entry.stats.hits(), 1);
+        assert_eq!(drop_entry.stats.misses(), 0);
+
+        // keep-info: miss (matched but overridden)
+        let keep_entry = snapshot.get("keep-info").unwrap();
+        assert_eq!(keep_entry.stats.hits(), 0);
+        assert_eq!(keep_entry.stats.misses(), 1);
+    }
+
+    #[tokio::test]
+    async fn evaluate_stats_all_kept() {
+        // When record is kept, all matching policies get a hit
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy1 = make_policy(
+            "keep-a",
+            vec![body_regex_matcher("test", false)],
+            "all",
+            true,
+        );
+        let policy2 = make_policy(
+            "keep-b",
+            vec![body_regex_matcher("test", false)],
+            "all",
+            true,
+        );
+        handle.update(vec![policy1, policy2]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let log = TestLog::new().with_body("test message");
+        engine.evaluate(&snapshot, &log).await.unwrap();
+
+        let entry_a = snapshot.get("keep-a").unwrap();
+        assert_eq!(entry_a.stats.hits(), 1);
+        assert_eq!(entry_a.stats.misses(), 0);
+
+        let entry_b = snapshot.get("keep-b").unwrap();
+        assert_eq!(entry_b.stats.hits(), 1);
+        assert_eq!(entry_b.stats.misses(), 0);
+    }
+
+    #[tokio::test]
+    async fn evaluate_stats_non_matching_unchanged() {
+        // Non-matching policies should have no counter change
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let matching_policy = make_policy(
+            "matches",
+            vec![body_regex_matcher("error", false)],
+            "all",
+            true,
+        );
+        let non_matching_policy = make_policy(
+            "no-match",
+            vec![body_regex_matcher("warning", false)],
+            "none",
+            true,
+        );
+        handle.update(vec![matching_policy, non_matching_policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let log = TestLog::new().with_body("error occurred");
+        engine.evaluate(&snapshot, &log).await.unwrap();
+
+        // matches: hit
+        let entry = snapshot.get("matches").unwrap();
+        assert_eq!(entry.stats.hits(), 1);
+        assert_eq!(entry.stats.misses(), 0);
+
+        // no-match: neither counter changes
+        let entry = snapshot.get("no-match").unwrap();
+        assert_eq!(entry.stats.hits(), 0);
+        assert_eq!(entry.stats.misses(), 0);
     }
 
     #[tokio::test]
