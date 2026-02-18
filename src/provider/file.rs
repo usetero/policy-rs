@@ -35,7 +35,8 @@ use serde::Deserialize;
 use crate::error::PolicyError;
 use crate::policy::Policy;
 use crate::proto::tero::policy::v1::{
-    self as pb, AttributePath, log_matcher, log_sample_key, metric_matcher, policy, trace_matcher,
+    self as pb, AttributePath, log_add, log_matcher, log_redact, log_remove, log_rename,
+    log_sample_key, metric_matcher, policy, trace_matcher,
 };
 
 use super::{PolicyCallback, PolicyProvider};
@@ -251,6 +252,9 @@ struct JsonLogTarget {
     r#match: Vec<JsonLogMatcher>,
     /// Keep action: `"all"`, `"none"`, `"N%"`, `"N/s"`, `"N/m"`.
     keep: String,
+    /// Optional transforms to apply to matching records.
+    #[serde(default)]
+    transform: Option<JsonLogTransform>,
     /// Optional field for consistent sampling.
     #[serde(default)]
     sample_key: Option<JsonLogSampleKey>,
@@ -292,6 +296,75 @@ enum JsonLogField {
 struct JsonLogSampleKey {
     #[serde(flatten)]
     field: JsonLogField,
+}
+
+// -- Log transform types ------------------------------------------------------
+
+/// Transform operations to apply to matching log records.
+#[derive(Deserialize)]
+struct JsonLogTransform {
+    #[serde(default)]
+    remove: Vec<JsonLogRemove>,
+    #[serde(default)]
+    redact: Vec<JsonLogRedact>,
+    #[serde(default)]
+    rename: Vec<JsonLogRename>,
+    #[serde(default)]
+    add: Vec<JsonLogAdd>,
+}
+
+/// Remove a field from a log record.
+#[derive(Deserialize)]
+struct JsonLogRemove {
+    #[serde(flatten)]
+    field: JsonLogField,
+}
+
+/// Redact a field's value in a log record.
+#[derive(Deserialize)]
+struct JsonLogRedact {
+    #[serde(flatten)]
+    field: JsonLogField,
+    replacement: String,
+}
+
+/// Rename a field in a log record.
+///
+/// Uses `from_` prefixed field names to distinguish the source reference:
+/// `from_log_field`, `from_log_attribute`, `from_resource_attribute`, `from_scope_attribute`.
+#[derive(Deserialize)]
+struct JsonLogRename {
+    #[serde(flatten)]
+    from: JsonLogRenameFrom,
+    to: String,
+    #[serde(default)]
+    upsert: bool,
+}
+
+/// Source field selector for rename transforms.
+///
+/// Uses `from_` prefix in JSON to distinguish the source reference from other
+/// attribute references, matching the proto `log_rename::From` naming convention.
+#[derive(Deserialize)]
+enum JsonLogRenameFrom {
+    #[serde(rename = "from_log_field")]
+    LogField(String),
+    #[serde(rename = "from_log_attribute")]
+    LogAttribute(JsonAttributePath),
+    #[serde(rename = "from_resource_attribute")]
+    ResourceAttribute(JsonAttributePath),
+    #[serde(rename = "from_scope_attribute")]
+    ScopeAttribute(JsonAttributePath),
+}
+
+/// Add a field to a log record.
+#[derive(Deserialize)]
+struct JsonLogAdd {
+    #[serde(flatten)]
+    field: JsonLogField,
+    value: String,
+    #[serde(default)]
+    upsert: bool,
 }
 
 // -- Metric types -------------------------------------------------------------
@@ -455,6 +528,10 @@ impl JsonLogTarget {
             .into_iter()
             .map(|m| m.into_proto(policy_id))
             .collect();
+        let transform = self
+            .transform
+            .map(|t| t.into_proto(policy_id))
+            .transpose()?;
         let sample_key = self
             .sample_key
             .map(|sk| sk.into_proto(policy_id))
@@ -462,7 +539,7 @@ impl JsonLogTarget {
         Ok(pb::LogTarget {
             r#match: matchers?,
             keep: self.keep,
-            transform: None,
+            transform,
             sample_key,
         })
     }
@@ -483,6 +560,92 @@ impl JsonLogSampleKey {
     fn into_proto(self, policy_id: &str) -> Result<pb::LogSampleKey, PolicyError> {
         Ok(pb::LogSampleKey {
             field: Some(self.field.into_sample_key_field(policy_id)?),
+        })
+    }
+}
+
+impl JsonLogTransform {
+    fn into_proto(self, policy_id: &str) -> Result<pb::LogTransform, PolicyError> {
+        let remove: Result<Vec<_>, _> = self
+            .remove
+            .into_iter()
+            .map(|r| r.into_proto(policy_id))
+            .collect();
+        let redact: Result<Vec<_>, _> = self
+            .redact
+            .into_iter()
+            .map(|r| r.into_proto(policy_id))
+            .collect();
+        let rename: Result<Vec<_>, _> = self
+            .rename
+            .into_iter()
+            .map(|r| r.into_proto(policy_id))
+            .collect();
+        let add: Result<Vec<_>, _> = self
+            .add
+            .into_iter()
+            .map(|a| a.into_proto(policy_id))
+            .collect();
+        Ok(pb::LogTransform {
+            remove: remove?,
+            redact: redact?,
+            rename: rename?,
+            add: add?,
+        })
+    }
+}
+
+impl JsonLogRemove {
+    fn into_proto(self, policy_id: &str) -> Result<pb::LogRemove, PolicyError> {
+        Ok(pb::LogRemove {
+            field: Some(self.field.into_remove_field(policy_id)?),
+        })
+    }
+}
+
+impl JsonLogRedact {
+    fn into_proto(self, policy_id: &str) -> Result<pb::LogRedact, PolicyError> {
+        Ok(pb::LogRedact {
+            field: Some(self.field.into_redact_field(policy_id)?),
+            replacement: self.replacement,
+        })
+    }
+}
+
+impl JsonLogRename {
+    fn into_proto(self, policy_id: &str) -> Result<pb::LogRename, PolicyError> {
+        Ok(pb::LogRename {
+            from: Some(self.from.into_proto(policy_id)?),
+            to: self.to,
+            upsert: self.upsert,
+        })
+    }
+}
+
+impl JsonLogRenameFrom {
+    fn into_proto(self, policy_id: &str) -> Result<log_rename::From, PolicyError> {
+        match self {
+            Self::LogField(name) => {
+                let f = parse_log_field_name(policy_id, &name)?;
+                Ok(log_rename::From::FromLogField(f as i32))
+            }
+            Self::LogAttribute(path) => Ok(log_rename::From::FromLogAttribute(path.into_proto())),
+            Self::ResourceAttribute(path) => {
+                Ok(log_rename::From::FromResourceAttribute(path.into_proto()))
+            }
+            Self::ScopeAttribute(path) => {
+                Ok(log_rename::From::FromScopeAttribute(path.into_proto()))
+            }
+        }
+    }
+}
+
+impl JsonLogAdd {
+    fn into_proto(self, policy_id: &str) -> Result<pb::LogAdd, PolicyError> {
+        Ok(pb::LogAdd {
+            field: Some(self.field.into_add_field(policy_id)?),
+            value: self.value,
+            upsert: self.upsert,
         })
     }
 }
@@ -515,6 +678,48 @@ impl JsonLogField {
             Self::ScopeAttribute(path) => {
                 Ok(log_sample_key::Field::ScopeAttribute(path.into_proto()))
             }
+        }
+    }
+
+    fn into_remove_field(self, policy_id: &str) -> Result<log_remove::Field, PolicyError> {
+        match self {
+            Self::LogField(name) => {
+                let f = parse_log_field_name(policy_id, &name)?;
+                Ok(log_remove::Field::LogField(f as i32))
+            }
+            Self::LogAttribute(path) => Ok(log_remove::Field::LogAttribute(path.into_proto())),
+            Self::ResourceAttribute(path) => {
+                Ok(log_remove::Field::ResourceAttribute(path.into_proto()))
+            }
+            Self::ScopeAttribute(path) => Ok(log_remove::Field::ScopeAttribute(path.into_proto())),
+        }
+    }
+
+    fn into_redact_field(self, policy_id: &str) -> Result<log_redact::Field, PolicyError> {
+        match self {
+            Self::LogField(name) => {
+                let f = parse_log_field_name(policy_id, &name)?;
+                Ok(log_redact::Field::LogField(f as i32))
+            }
+            Self::LogAttribute(path) => Ok(log_redact::Field::LogAttribute(path.into_proto())),
+            Self::ResourceAttribute(path) => {
+                Ok(log_redact::Field::ResourceAttribute(path.into_proto()))
+            }
+            Self::ScopeAttribute(path) => Ok(log_redact::Field::ScopeAttribute(path.into_proto())),
+        }
+    }
+
+    fn into_add_field(self, policy_id: &str) -> Result<log_add::Field, PolicyError> {
+        match self {
+            Self::LogField(name) => {
+                let f = parse_log_field_name(policy_id, &name)?;
+                Ok(log_add::Field::LogField(f as i32))
+            }
+            Self::LogAttribute(path) => Ok(log_add::Field::LogAttribute(path.into_proto())),
+            Self::ResourceAttribute(path) => {
+                Ok(log_add::Field::ResourceAttribute(path.into_proto()))
+            }
+            Self::ScopeAttribute(path) => Ok(log_add::Field::ScopeAttribute(path.into_proto())),
         }
     }
 }
@@ -1656,6 +1861,296 @@ mod tests {
 
         assert_eq!(policies.len(), 1);
         assert!(policies[0].enabled());
+    }
+
+    // ==================== Transform Tests ====================
+
+    #[test]
+    fn load_policy_with_remove_transform() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "remove-transform",
+                    "name": "Remove Transform",
+                    "log": {
+                        "match": [
+                            { "log_field": "body", "contains": "auth" }
+                        ],
+                        "keep": "all",
+                        "transform": {
+                            "remove": [
+                                { "log_attribute": "password" },
+                                { "log_field": "body" }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        assert_eq!(policies.len(), 1);
+        let log_target = policies[0].log_target().unwrap();
+        let transform = log_target.transform.as_ref().unwrap();
+        assert_eq!(transform.remove.len(), 2);
+
+        assert!(matches!(
+            transform.remove[0].field,
+            Some(log_remove::Field::LogAttribute(_))
+        ));
+        assert!(matches!(
+            transform.remove[1].field,
+            Some(log_remove::Field::LogField(f)) if f == pb::LogField::Body as i32
+        ));
+    }
+
+    #[test]
+    fn load_policy_with_redact_transform() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "redact-transform",
+                    "name": "Redact Transform",
+                    "log": {
+                        "match": [
+                            { "log_field": "body", "regex": ".*" }
+                        ],
+                        "keep": "all",
+                        "transform": {
+                            "redact": [
+                                { "log_attribute": "ssn", "replacement": "[REDACTED]" }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        let transform = policies[0]
+            .log_target()
+            .unwrap()
+            .transform
+            .as_ref()
+            .unwrap();
+        assert_eq!(transform.redact.len(), 1);
+        assert_eq!(transform.redact[0].replacement, "[REDACTED]");
+        assert!(matches!(
+            transform.redact[0].field,
+            Some(log_redact::Field::LogAttribute(_))
+        ));
+    }
+
+    #[test]
+    fn load_policy_with_rename_transform() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "rename-transform",
+                    "name": "Rename Transform",
+                    "log": {
+                        "match": [
+                            { "log_field": "body", "regex": ".*" }
+                        ],
+                        "keep": "all",
+                        "transform": {
+                            "rename": [
+                                { "from_log_attribute": "old_name", "to": "new_name", "upsert": true }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        let transform = policies[0]
+            .log_target()
+            .unwrap()
+            .transform
+            .as_ref()
+            .unwrap();
+        assert_eq!(transform.rename.len(), 1);
+        assert_eq!(transform.rename[0].to, "new_name");
+        assert!(transform.rename[0].upsert);
+        assert!(matches!(
+            transform.rename[0].from,
+            Some(log_rename::From::FromLogAttribute(_))
+        ));
+    }
+
+    #[test]
+    fn load_policy_with_add_transform() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "add-transform",
+                    "name": "Add Transform",
+                    "log": {
+                        "match": [
+                            { "log_field": "body", "regex": ".*" }
+                        ],
+                        "keep": "all",
+                        "transform": {
+                            "add": [
+                                { "log_attribute": "env", "value": "prod", "upsert": false }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        let transform = policies[0]
+            .log_target()
+            .unwrap()
+            .transform
+            .as_ref()
+            .unwrap();
+        assert_eq!(transform.add.len(), 1);
+        assert_eq!(transform.add[0].value, "prod");
+        assert!(!transform.add[0].upsert);
+        assert!(matches!(
+            transform.add[0].field,
+            Some(log_add::Field::LogAttribute(_))
+        ));
+    }
+
+    #[test]
+    fn load_policy_with_all_transform_types() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "all-transforms",
+                    "name": "All Transforms",
+                    "log": {
+                        "match": [
+                            { "log_field": "body", "regex": ".*" }
+                        ],
+                        "keep": "all",
+                        "transform": {
+                            "remove": [
+                                { "log_attribute": "debug_info" }
+                            ],
+                            "redact": [
+                                { "log_attribute": "password", "replacement": "***" }
+                            ],
+                            "rename": [
+                                { "from_log_attribute": "old", "to": "new" }
+                            ],
+                            "add": [
+                                { "log_attribute": "processed", "value": "true" }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        let transform = policies[0]
+            .log_target()
+            .unwrap()
+            .transform
+            .as_ref()
+            .unwrap();
+        assert_eq!(transform.remove.len(), 1);
+        assert_eq!(transform.redact.len(), 1);
+        assert_eq!(transform.rename.len(), 1);
+        assert_eq!(transform.add.len(), 1);
+    }
+
+    #[test]
+    fn load_policy_with_transform_resource_and_scope_attributes() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "multi-scope-transform",
+                    "name": "Multi Scope Transform",
+                    "log": {
+                        "match": [
+                            { "log_field": "body", "regex": ".*" }
+                        ],
+                        "keep": "all",
+                        "transform": {
+                            "remove": [
+                                { "resource_attribute": "internal.id" },
+                                { "scope_attribute": ["debug", "level"] }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        let transform = policies[0]
+            .log_target()
+            .unwrap()
+            .transform
+            .as_ref()
+            .unwrap();
+        assert_eq!(transform.remove.len(), 2);
+
+        match &transform.remove[0].field {
+            Some(log_remove::Field::ResourceAttribute(attr)) => {
+                assert_eq!(attr.path, vec!["internal.id"]);
+            }
+            other => panic!("expected ResourceAttribute, got {:?}", other),
+        }
+
+        match &transform.remove[1].field {
+            Some(log_remove::Field::ScopeAttribute(attr)) => {
+                assert_eq!(attr.path, vec!["debug", "level"]);
+            }
+            other => panic!("expected ScopeAttribute, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn load_policy_without_transform_still_works() {
+        // Ensure existing policies without transforms are unaffected.
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "no-transform",
+                    "name": "No Transform",
+                    "log": {
+                        "match": [
+                            { "log_field": "body", "regex": "error" }
+                        ],
+                        "keep": "none"
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        assert_eq!(policies.len(), 1);
+        let log_target = policies[0].log_target().unwrap();
+        assert!(log_target.transform.is_none());
     }
 
     // ==================== File Watch Tests ====================
