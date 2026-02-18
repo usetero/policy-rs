@@ -35,12 +35,6 @@
 ///
 /// When marshaling, implementations SHOULD use the shorthand array form for
 /// cleaner output.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(
-    from = "crate::proto::serde_helpers::attribute_path::AttributePathInput",
-    into = "crate::proto::serde_helpers::attribute_path::AttributePathInput"
-)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AttributePath {
     /// Path segments for attribute traversal.
@@ -50,8 +44,6 @@ pub struct AttributePath {
     pub path: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// LogTarget defines matching and actions for logs.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogTarget {
     /// Matchers to identify which logs this policy applies to (AND logic)
@@ -85,8 +77,6 @@ pub struct LogTarget {
 }
 /// LogSampleKey specifies which field to use as the sampling key for consistent
 /// sampling decisions.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogSampleKey {
     /// FIELD SELECTION (subset of LogMatcher fields appropriate for sampling keys)
@@ -98,8 +88,6 @@ pub struct LogSampleKey {
 pub mod log_sample_key {
     /// FIELD SELECTION (subset of LogMatcher fields appropriate for sampling keys)
     /// The field to use as the sampling key. Exactly one must be set.
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Field {
         /// Simple fields (trace_id, span_id, etc.)
@@ -126,17 +114,13 @@ pub mod log_sample_key {
 ///    specific enough to target the intended telemetry precisely.
 ///
 /// All regex fields use RE2 syntax for consistency across implementations.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogMatcher {
     /// If true, inverts the match result
     #[prost(bool, tag = "20")]
-    #[serde(default)]
     pub negate: bool,
     /// If true, applies case-insensitive matching to all match types
     #[prost(bool, tag = "21")]
-    #[serde(default)]
     pub case_insensitive: bool,
     /// FIELD SELECTION (keep in sync with LogRedact, LogRename, LogAdd, LogRemove)
     /// The field to match against. Exactly one must be set.
@@ -150,8 +134,6 @@ pub struct LogMatcher {
 pub mod log_matcher {
     /// FIELD SELECTION (keep in sync with LogRedact, LogRename, LogAdd, LogRemove)
     /// The field to match against. Exactly one must be set.
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Field {
         /// Simple fields (body, severity_text, trace_id, span_id, etc.)
@@ -168,8 +150,6 @@ pub mod log_matcher {
         ScopeAttribute(super::AttributePath),
     }
     /// Match type. Exactly one must be set.
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Match {
         /// Exact string match
@@ -193,8 +173,6 @@ pub mod log_matcher {
     }
 }
 /// LogTransform defines modifications to logs.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogTransform {
     /// Fields to remove
@@ -211,8 +189,6 @@ pub struct LogTransform {
     pub add: ::prost::alloc::vec::Vec<LogAdd>,
 }
 /// LogRemove removes a field.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogRemove {
     /// FIELD SELECTION (keep in sync with LogMatcher, LogRedact, LogRename, LogAdd)
@@ -224,8 +200,6 @@ pub struct LogRemove {
 pub mod log_remove {
     /// FIELD SELECTION (keep in sync with LogMatcher, LogRedact, LogRename, LogAdd)
     /// The field to remove. Exactly one must be set.
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Field {
         /// Simple fields (body, severity_text, trace_id, span_id, etc.)
@@ -243,8 +217,6 @@ pub mod log_remove {
     }
 }
 /// LogRedact masks a field value.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogRedact {
     /// Replacement value (e.g., "\[REDACTED\]")
@@ -259,8 +231,6 @@ pub struct LogRedact {
 pub mod log_redact {
     /// FIELD SELECTION (keep in sync with LogMatcher, LogRemove, LogRename, LogAdd)
     /// The field to redact. Exactly one must be set.
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Field {
         /// Simple fields (body, severity_text, trace_id, span_id, etc.)
@@ -278,8 +248,6 @@ pub mod log_redact {
     }
 }
 /// LogRename changes a field name.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogRename {
     /// The new field name
@@ -297,8 +265,6 @@ pub struct LogRename {
 pub mod log_rename {
     /// FIELD SELECTION (keep in sync with LogMatcher, LogRemove, LogRedact, LogAdd)
     /// The field to rename. Exactly one must be set.
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum From {
         /// Simple fields (body, severity_text, trace_id, span_id, etc.)
@@ -316,8 +282,6 @@ pub mod log_rename {
     }
 }
 /// LogAdd inserts a field.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogAdd {
     /// The value to set
@@ -335,8 +299,6 @@ pub struct LogAdd {
 pub mod log_add {
     /// FIELD SELECTION (keep in sync with LogMatcher, LogRemove, LogRedact, LogRename)
     /// The field to add. Exactly one must be set.
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Field {
         /// Simple fields (body, severity_text, trace_id, span_id, etc.)
@@ -354,8 +316,6 @@ pub mod log_add {
     }
 }
 /// LogField identifies simple log fields (non-keyed).
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum LogField {
@@ -403,8 +363,6 @@ impl LogField {
     }
 }
 /// MetricTarget defines matching and actions for metrics.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MetricTarget {
     /// Matchers to identify which metrics this policy applies to (AND logic)
@@ -424,17 +382,13 @@ pub struct MetricTarget {
 ///    specific enough to target the intended telemetry precisely.
 ///
 /// All regex fields use RE2 syntax for consistency across implementations.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MetricMatcher {
     /// If true, inverts the match result
     #[prost(bool, tag = "20")]
-    #[serde(default)]
     pub negate: bool,
     /// If true, applies case-insensitive matching to all match types
     #[prost(bool, tag = "21")]
-    #[serde(default)]
     pub case_insensitive: bool,
     /// FIELD SELECTION
     /// The field to match against. Exactly one must be set.
@@ -449,8 +403,6 @@ pub struct MetricMatcher {
 pub mod metric_matcher {
     /// FIELD SELECTION
     /// The field to match against. Exactly one must be set.
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Field {
         /// Simple fields (name, description, unit, etc.)
@@ -474,8 +426,6 @@ pub mod metric_matcher {
     }
     /// Match type. Exactly one must be set.
     /// Note: For metric_type field, only exists is valid (type equality is implicit).
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Match {
         /// Exact string match
@@ -499,8 +449,6 @@ pub mod metric_matcher {
     }
 }
 /// MetricField identifies simple metric fields (non-keyed).
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum MetricField {
@@ -549,8 +497,6 @@ impl MetricField {
     }
 }
 /// MetricType identifies the type of metric for matching.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum MetricType {
@@ -591,8 +537,6 @@ impl MetricType {
 }
 /// AggregationTemporality defines how a metric aggregator reports aggregated values.
 /// Mirrors opentelemetry.proto.metrics.v1.AggregationTemporality.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum AggregationTemporality {
@@ -623,8 +567,6 @@ impl AggregationTemporality {
     }
 }
 /// TraceTarget defines matching and sampling actions for traces/spans.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TraceTarget {
     /// Matchers to identify which spans this policy applies to (AND logic)
@@ -645,17 +587,13 @@ pub struct TraceTarget {
 ///    specific enough to target the intended telemetry precisely.
 ///
 /// All regex fields use RE2 syntax for consistency across implementations.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TraceMatcher {
     /// If true, inverts the match result
     #[prost(bool, tag = "20")]
-    #[serde(default)]
     pub negate: bool,
     /// If true, applies case-insensitive matching to all match types
     #[prost(bool, tag = "21")]
-    #[serde(default)]
     pub case_insensitive: bool,
     /// FIELD SELECTION
     /// The field to match against. Exactly one must be set.
@@ -670,8 +608,6 @@ pub struct TraceMatcher {
 pub mod trace_matcher {
     /// FIELD SELECTION
     /// The field to match against. Exactly one must be set.
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Field {
         /// Simple fields (name, trace_id, span_id, etc.)
@@ -704,8 +640,6 @@ pub mod trace_matcher {
     }
     /// Match type. Exactly one must be set.
     /// Note: For span_kind and span_status fields, only exists is valid (equality is implicit).
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Match {
         /// Exact string match
@@ -740,8 +674,6 @@ pub mod trace_matcher {
 /// a rejection threshold (T). If R >= T, the span is kept; otherwise it is dropped.
 /// The threshold is derived from the configured percentage:
 ///    T = (1 - percentage/100) * 2^56
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct TraceSamplingConfig {
     /// Percentage at which items are sampled (0-100).
@@ -774,8 +706,6 @@ pub struct TraceSamplingConfig {
     pub fail_closed: ::core::option::Option<bool>,
 }
 /// TraceField identifies simple span fields (non-keyed).
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum TraceField {
@@ -831,8 +761,6 @@ impl TraceField {
 }
 /// SpanKind identifies the type of span for matching.
 /// Mirrors opentelemetry.proto.trace.v1.Span.SpanKind.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum SpanKind {
@@ -873,8 +801,6 @@ impl SpanKind {
 }
 /// SpanStatusCode identifies the span status for matching.
 /// Mirrors opentelemetry.proto.trace.v1.Status.StatusCode.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum SpanStatusCode {
@@ -905,8 +831,6 @@ impl SpanStatusCode {
     }
 }
 /// SamplingMode determines how the sampling decision is made.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum SamplingMode {
@@ -957,8 +881,6 @@ impl SamplingMode {
 /// - Dynamic: Can be updated post-instantiation
 /// - Idempotent: Safe to apply to multiple components
 /// - Fail-Open: Does not interfere with telemetry on failure
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Policy {
     /// Unique identifier for this policy
@@ -969,44 +891,28 @@ pub struct Policy {
     pub name: ::prost::alloc::string::String,
     /// Optional description
     #[prost(string, tag = "3")]
-    #[serde(default)]
     pub description: ::prost::alloc::string::String,
     /// Whether this policy is enabled
     #[prost(bool, tag = "4")]
-    #[serde(default = "crate::proto::serde_helpers::default_true")]
     pub enabled: bool,
     /// Timestamp when this policy was created (Unix epoch nanoseconds)
     #[prost(fixed64, tag = "5")]
-    #[serde(default)]
-    #[serde(
-        serialize_with = "crate::proto::serde_helpers::serialize_u64_as_string",
-        deserialize_with = "crate::proto::serde_helpers::deserialize_u64_from_string"
-    )]
     pub created_at_unix_nano: u64,
     /// Timestamp when this policy was last modified (Unix epoch nanoseconds)
     #[prost(fixed64, tag = "6")]
-    #[serde(default)]
-    #[serde(
-        serialize_with = "crate::proto::serde_helpers::serialize_u64_as_string",
-        deserialize_with = "crate::proto::serde_helpers::deserialize_u64_from_string"
-    )]
     pub modified_at_unix_nano: u64,
     /// Labels for metadata and routing
     #[prost(message, repeated, tag = "7")]
-    #[serde(default)]
     pub labels: ::prost::alloc::vec::Vec<
         super::super::super::opentelemetry::proto::common::v1::KeyValue,
     >,
     /// Target configuration. Exactly one must be set.
     #[prost(oneof = "policy::Target", tags = "10, 11, 12")]
-    #[serde(flatten)]
     pub target: ::core::option::Option<policy::Target>,
 }
 /// Nested message and enum types in `Policy`.
 pub mod policy {
     /// Target configuration. Exactly one must be set.
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Target {
         #[prost(message, tag = "10")]
@@ -1018,8 +924,6 @@ pub mod policy {
     }
 }
 /// ClientMetadata contains information about the client requesting policies.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ClientMetadata {
     /// Policy stages this client supports
@@ -1042,29 +946,17 @@ pub struct ClientMetadata {
     >,
 }
 /// TransformStageStatus reports hits and misses for a single transform stage.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct TransformStageStatus {
     /// Number of times this stage was applied.
     #[prost(int64, tag = "1")]
-    #[serde(
-        serialize_with = "crate::proto::serde_helpers::serialize_i64_as_string",
-        deserialize_with = "crate::proto::serde_helpers::deserialize_i64_from_string"
-    )]
     pub hits: i64,
     /// Number of times this stage was evaluated but the field selected nothing.
     #[prost(int64, tag = "2")]
-    #[serde(
-        serialize_with = "crate::proto::serde_helpers::serialize_i64_as_string",
-        deserialize_with = "crate::proto::serde_helpers::deserialize_i64_from_string"
-    )]
     pub misses: i64,
 }
 /// PolicySyncStatus reports the status of an individual policy during sync.
 /// Used to communicate policy execution metrics and errors back to the provider.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PolicySyncStatus {
     /// The policy ID this status refers to.
@@ -1072,17 +964,9 @@ pub struct PolicySyncStatus {
     pub id: ::prost::alloc::string::String,
     /// Number of times this policy matched telemetry since the last sync.
     #[prost(int64, tag = "2")]
-    #[serde(
-        serialize_with = "crate::proto::serde_helpers::serialize_i64_as_string",
-        deserialize_with = "crate::proto::serde_helpers::deserialize_i64_from_string"
-    )]
     pub match_hits: i64,
     /// Number of times this policy was evaluated but did not match.
     #[prost(int64, tag = "3")]
-    #[serde(
-        serialize_with = "crate::proto::serde_helpers::serialize_i64_as_string",
-        deserialize_with = "crate::proto::serde_helpers::deserialize_i64_from_string"
-    )]
     pub match_misses: i64,
     /// Error messages encountered while applying this policy.
     #[prost(string, repeated, tag = "4")]
@@ -1098,8 +982,6 @@ pub struct PolicySyncStatus {
     pub add: ::core::option::Option<TransformStageStatus>,
 }
 /// SyncRequest is sent by clients to request policy updates.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncRequest {
     /// Client identification and capabilities
@@ -1110,10 +992,6 @@ pub struct SyncRequest {
     pub full_sync: bool,
     /// Last sync timestamp (Unix epoch nanoseconds)
     #[prost(fixed64, tag = "3")]
-    #[serde(
-        serialize_with = "crate::proto::serde_helpers::serialize_u64_as_string",
-        deserialize_with = "crate::proto::serde_helpers::deserialize_u64_from_string"
-    )]
     pub last_sync_timestamp_unix_nano: u64,
     /// The hash of the policy list as last received by the client.
     #[prost(string, tag = "4")]
@@ -1123,8 +1001,6 @@ pub struct SyncRequest {
     pub policy_statuses: ::prost::alloc::vec::Vec<PolicySyncStatus>,
 }
 /// SyncResponse contains policy updates for the client.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncResponse {
     /// The policies to sync
@@ -1135,25 +1011,18 @@ pub struct SyncResponse {
     pub hash: ::prost::alloc::string::String,
     /// Timestamp of this sync (Unix epoch nanoseconds)
     #[prost(fixed64, tag = "3")]
-    #[serde(
-        serialize_with = "crate::proto::serde_helpers::serialize_u64_as_string",
-        deserialize_with = "crate::proto::serde_helpers::deserialize_u64_from_string"
-    )]
     pub sync_timestamp_unix_nano: u64,
     /// Suggested interval before next sync (in seconds)
     #[prost(uint32, tag = "4")]
     pub recommended_sync_interval_seconds: u32,
     /// Whether this is a full replacement or incremental update
     #[prost(enumeration = "SyncType", tag = "5")]
-    #[serde(with = "crate::proto::serde_helpers::sync_type")]
     pub sync_type: i32,
     /// Error message if sync failed
     #[prost(string, tag = "6")]
     pub error_message: ::prost::alloc::string::String,
 }
 /// PolicyStage identifies the execution stage for a policy.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum PolicyStage {
@@ -1193,8 +1062,6 @@ impl PolicyStage {
         }
     }
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum SyncType {
