@@ -79,7 +79,13 @@ impl<S: Signal> CompiledTransform<S> {
                     result
                 }
                 TransformOp::Redact { field, replacement } => {
-                    let result = record.redact_field(field, replacement);
+                    // Guard: only call redact_field if the field actually exists.
+                    // Per spec, redact on a nonexistent field MUST be a no-op.
+                    let result = if record.get_field(field).is_some() {
+                        record.redact_field(field, replacement)
+                    } else {
+                        false
+                    };
                     if let Some(s) = stats {
                         if result {
                             s.redact.record_hit();
@@ -287,8 +293,17 @@ mod tests {
 
     impl crate::engine::matchable::Matchable for TestLog {
         type Signal = LogSignal;
-        fn get_field(&self, _field: &LogFieldSelector) -> Option<std::borrow::Cow<'_, str>> {
-            None // Not used by transform tests
+        fn get_field(&self, field: &LogFieldSelector) -> Option<std::borrow::Cow<'_, str>> {
+            match field {
+                LogFieldSelector::Simple(LogField::Body) => {
+                    self.body.as_deref().map(std::borrow::Cow::Borrowed)
+                }
+                LogFieldSelector::LogAttribute(path) => path
+                    .first()
+                    .and_then(|key| self.attributes.get(key))
+                    .map(|v| std::borrow::Cow::Borrowed(v.as_str())),
+                _ => None,
+            }
         }
     }
 
@@ -552,5 +567,26 @@ mod tests {
 
         let applied = transform.apply(&mut log);
         assert_eq!(applied, 1);
+    }
+
+    #[test]
+    fn redact_nonexistent_attribute_does_not_create_it() {
+        let mut log = TestLog::new()
+            .with_body("test")
+            .with_attr("existing", "keep-me");
+
+        let transform = CompiledTransform::<LogSignal> {
+            ops: vec![TransformOp::Redact {
+                field: LogFieldSelector::LogAttribute(vec!["missing".to_string()]),
+                replacement: "[REDACTED]".to_string(),
+            }],
+        };
+
+        let applied = transform.apply(&mut log);
+        assert_eq!(applied, 0);
+        // The "missing" attribute must NOT be created
+        assert!(!log.attributes.contains_key("missing"));
+        // Existing attributes must be unchanged
+        assert_eq!(log.attributes.get("existing"), Some(&"keep-me".to_string()));
     }
 }
