@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.5](https://github.com/usetero/policy-rs/compare/v1.4.4...v1.4.5) (2026-02-18)
+
+
+### Bug Fixes
+
+* add file support for transforms ([#47](https://github.com/usetero/policy-rs/issues/47)) ([8e02b0f](https://github.com/usetero/policy-rs/commit/8e02b0f39053423c0611463e9cad1320ea7a3114))
+
 ## [1.4.4](https://github.com/usetero/policy-rs/compare/v1.4.3...v1.4.4) (2026-02-18)
 
 
