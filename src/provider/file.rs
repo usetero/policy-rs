@@ -343,15 +343,18 @@ struct JsonLogRename {
 
 /// Source field selector for rename transforms.
 ///
-/// Uses `from_` prefix to match the proto `log_rename::From` variant names and
-/// to distinguish the source reference from other attribute references.
+/// Uses `from_` prefix in JSON to distinguish the source reference from other
+/// attribute references, matching the proto `log_rename::From` naming convention.
 #[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
 enum JsonLogRenameFrom {
-    FromLogField(String),
-    FromLogAttribute(JsonAttributePath),
-    FromResourceAttribute(JsonAttributePath),
-    FromScopeAttribute(JsonAttributePath),
+    #[serde(rename = "from_log_field")]
+    LogField(String),
+    #[serde(rename = "from_log_attribute")]
+    LogAttribute(JsonAttributePath),
+    #[serde(rename = "from_resource_attribute")]
+    ResourceAttribute(JsonAttributePath),
+    #[serde(rename = "from_scope_attribute")]
+    ScopeAttribute(JsonAttributePath),
 }
 
 /// Add a field to a log record.
@@ -622,17 +625,15 @@ impl JsonLogRename {
 impl JsonLogRenameFrom {
     fn into_proto(self, policy_id: &str) -> Result<log_rename::From, PolicyError> {
         match self {
-            Self::FromLogField(name) => {
+            Self::LogField(name) => {
                 let f = parse_log_field_name(policy_id, &name)?;
                 Ok(log_rename::From::FromLogField(f as i32))
             }
-            Self::FromLogAttribute(path) => {
-                Ok(log_rename::From::FromLogAttribute(path.into_proto()))
-            }
-            Self::FromResourceAttribute(path) => {
+            Self::LogAttribute(path) => Ok(log_rename::From::FromLogAttribute(path.into_proto())),
+            Self::ResourceAttribute(path) => {
                 Ok(log_rename::From::FromResourceAttribute(path.into_proto()))
             }
-            Self::FromScopeAttribute(path) => {
+            Self::ScopeAttribute(path) => {
                 Ok(log_rename::From::FromScopeAttribute(path.into_proto()))
             }
         }
