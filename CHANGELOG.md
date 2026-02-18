@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.7](https://github.com/usetero/policy-rs/compare/v1.4.6...v1.4.7) (2026-02-18)
+
+
+### Bug Fixes
+
+* record misses correctly ([#53](https://github.com/usetero/policy-rs/issues/53)) ([bc88cac](https://github.com/usetero/policy-rs/commit/bc88cacea5d2d601c6f07c649fb1b82397f7c99c))
+
 ## [1.4.6](https://github.com/usetero/policy-rs/compare/v1.4.5...v1.4.6) (2026-02-18)
 
 
