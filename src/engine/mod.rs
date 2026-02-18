@@ -108,8 +108,7 @@ impl PolicyEngine {
             .as_ref()
             .and_then(|key| log.get_field(key));
 
-        let result =
-            self.apply_keep(&winner.id, &winner.keep, false, sample_key_value.as_deref());
+        let result = self.apply_keep(&winner.id, &winner.keep, false, sample_key_value.as_deref());
         let will_keep = matches!(
             &result,
             EvaluateResult::Keep { .. }
