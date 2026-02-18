@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.4](https://github.com/usetero/policy-rs/compare/v1.4.3...v1.4.4) (2026-02-18)
+
+
+### Bug Fixes
+
+* json should use proto formatting ([#46](https://github.com/usetero/policy-rs/issues/46)) ([81f7d7d](https://github.com/usetero/policy-rs/commit/81f7d7d28e1b2b5b412ff1c932b1c15aa43c9bd8))
+* policy rs httpprovider does not report stats back to server ([#44](https://github.com/usetero/policy-rs/issues/44)) ([4383c21](https://github.com/usetero/policy-rs/commit/4383c2163fca978515d023affb10c04e0b2024a3))
+
 ## [1.4.3](https://github.com/usetero/policy-rs/compare/v1.4.2...v1.4.3) (2026-02-17)
 
 
