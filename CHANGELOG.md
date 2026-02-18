@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.6](https://github.com/usetero/policy-rs/compare/v1.4.5...v1.4.6) (2026-02-18)
+
+
+### Bug Fixes
+
+* noop when field not present ([#50](https://github.com/usetero/policy-rs/issues/50)) ([4d01379](https://github.com/usetero/policy-rs/commit/4d013792ccf52352df3159affafed5343c8b5403))
+
 ## [1.4.5](https://github.com/usetero/policy-rs/compare/v1.4.4...v1.4.5) (2026-02-18)
 
 
