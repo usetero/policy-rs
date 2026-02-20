@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.10](https://github.com/usetero/policy-rs/compare/v1.4.9...v1.4.10) (2026-02-20)
+
+
+### Bug Fixes
+
+* add missing aliases ([#60](https://github.com/usetero/policy-rs/issues/60)) ([2ba206e](https://github.com/usetero/policy-rs/commit/2ba206e2d0bb3e707da085aae6c5d9965c52b834))
+
 ## [1.4.9](https://github.com/usetero/policy-rs/compare/v1.4.8...v1.4.9) (2026-02-20)
 
 
