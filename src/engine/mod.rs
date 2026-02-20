@@ -28,10 +28,8 @@ use crate::field::TraceFieldSelector;
 use crate::registry::PolicySnapshot;
 
 use self::sampling::{
-    encode_threshold, extract_trace_randomness, rejection_threshold, should_keep_percentage,
+    encode_threshold, extract_trace_randomness, rejection_threshold, should_sample_log,
 };
-#[cfg(test)]
-use self::sampling::RANDOMNESS_MASK;
 
 /// Result of evaluating a log record against policies.
 #[derive(Debug, Clone, PartialEq)]
@@ -161,7 +159,7 @@ impl PolicyEngine {
         let will_keep = match &winner.keep {
             CompiledKeep::None => false,
             CompiledKeep::All => true,
-            CompiledKeep::Percentage(p) => should_keep_percentage(*p, sample_key_value.as_deref()),
+            CompiledKeep::Percentage(p) => should_sample_log(*p, sample_key_value.as_deref()),
             CompiledKeep::RatePerSecond(limit) => {
                 self.rate_limiters
                     .check(&winner.id, *limit, Duration::from_secs(1))
@@ -238,7 +236,7 @@ impl PolicyEngine {
                 transformed,
             },
             CompiledKeep::Percentage(p) => {
-                let keep = should_keep_percentage(*p, sample_key_value);
+                let keep = should_sample_log(*p, sample_key_value);
                 EvaluateResult::Sample {
                     policy_id: policy_id.to_string(),
                     percentage: *p * 100.0,
@@ -1013,9 +1011,7 @@ mod tests {
             let result = engine.evaluate(&snapshot, &log).await.unwrap();
             match result {
                 EvaluateResult::RateLimit { allowed: true, .. } => allowed_count += 1,
-                EvaluateResult::RateLimit {
-                    allowed: false, ..
-                } => rejected_count += 1,
+                EvaluateResult::RateLimit { allowed: false, .. } => rejected_count += 1,
                 other => panic!("expected RateLimit result, got {:?}", other),
             }
         }
@@ -1049,9 +1045,7 @@ mod tests {
                 .unwrap();
             match result {
                 EvaluateResult::RateLimit { allowed: true, .. } => allowed_count += 1,
-                EvaluateResult::RateLimit {
-                    allowed: false, ..
-                } => rejected_count += 1,
+                EvaluateResult::RateLimit { allowed: false, .. } => rejected_count += 1,
                 other => panic!("expected RateLimit result, got {:?}", other),
             }
         }
@@ -2212,7 +2206,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn evaluate_without_sample_key_field_falls_back_to_random() {
+    async fn evaluate_without_sample_key_field_falls_back_to_keep() {
         use crate::proto::tero::policy::v1::{LogSampleKey, log_sample_key};
 
         let registry = PolicyRegistry::new();
@@ -2256,12 +2250,12 @@ mod tests {
         let snapshot = registry.snapshot();
         let engine = PolicyEngine::new();
 
-        // Log without the sample key field - should fall back to random sampling
+        // Log without the sample key field - per OTel spec, falls back to keep
         let log = TestLog::new().with_body("test");
 
-        // Just verify it doesn't panic and returns a valid result
         let result = engine.evaluate(&snapshot, &log).await.unwrap();
-        assert!(matches!(result, EvaluateResult::Sample { .. }));
+        // Missing sample key value → always keep (per Go conformance)
+        assert!(matches!(result, EvaluateResult::Sample { keep: true, .. }));
     }
 
     // ==================== Metric-specific tests ====================

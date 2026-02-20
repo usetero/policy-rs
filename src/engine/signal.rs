@@ -24,6 +24,7 @@ pub trait Signal: 'static {
     fn compiled_matchers(snapshot: &PolicySnapshot) -> Option<&CompiledMatchers<Self>>
     where
         Self: Sized;
+
 }
 
 /// Log telemetry signal.
