@@ -572,9 +572,7 @@ mod tests {
                     LogField::ResourceSchemaUrl => {
                         self.resource_schema_url.as_deref().map(Cow::Borrowed)
                     }
-                    LogField::ScopeSchemaUrl => {
-                        self.scope_schema_url.as_deref().map(Cow::Borrowed)
-                    }
+                    LogField::ScopeSchemaUrl => self.scope_schema_url.as_deref().map(Cow::Borrowed),
                     _ => None,
                 },
                 LogFieldSelector::LogAttribute(path) => path
@@ -2307,9 +2305,7 @@ mod tests {
 
         let policy = make_policy(
             "drop-old-schema",
-            vec![log_resource_schema_url_matcher(
-                "https://old-schema/1.0",
-            )],
+            vec![log_resource_schema_url_matcher("https://old-schema/1.0")],
             "none",
             true,
         );
@@ -2483,9 +2479,7 @@ mod tests {
                     MetricField::Description => self.description.as_deref().map(Cow::Borrowed),
                     MetricField::Unit => self.unit.as_deref().map(Cow::Borrowed),
                     MetricField::ScopeName => self.scope_name.as_deref().map(Cow::Borrowed),
-                    MetricField::ScopeVersion => {
-                        self.scope_version.as_deref().map(Cow::Borrowed)
-                    }
+                    MetricField::ScopeVersion => self.scope_version.as_deref().map(Cow::Borrowed),
                     MetricField::ResourceSchemaUrl => {
                         self.resource_schema_url.as_deref().map(Cow::Borrowed)
                     }
@@ -3023,9 +3017,7 @@ mod tests {
 
         let policy = make_metric_policy(
             "drop-old-schema",
-            vec![metric_resource_schema_url_matcher(
-                "https://old-schema/1.0",
-            )],
+            vec![metric_resource_schema_url_matcher("https://old-schema/1.0")],
             false,
             true,
         );
@@ -3438,9 +3430,7 @@ mod tests {
                 TraceFieldSelector::SpanStatus => self
                     .span_status
                     .map(|s| Cow::Owned(s.as_str_name().to_string())),
-                TraceFieldSelector::EventName => {
-                    self.event_name.as_deref().map(Cow::Borrowed)
-                }
+                TraceFieldSelector::EventName => self.event_name.as_deref().map(Cow::Borrowed),
                 TraceFieldSelector::SpanAttribute(path) => path
                     .first()
                     .and_then(|key| self.span_attributes.get(key))
@@ -4281,9 +4271,7 @@ mod tests {
 
         let policy = make_trace_policy(
             "drop-old-schema",
-            vec![trace_resource_schema_url_matcher(
-                "https://old-schema/1.0",
-            )],
+            vec![trace_resource_schema_url_matcher("https://old-schema/1.0")],
             Some(sampling_config(0.0)),
             true,
         );
