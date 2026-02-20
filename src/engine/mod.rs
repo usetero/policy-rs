@@ -512,6 +512,8 @@ mod tests {
         severity_text: Option<String>,
         log_attributes: HashMap<String, String>,
         resource_attributes: HashMap<String, String>,
+        resource_schema_url: Option<String>,
+        scope_schema_url: Option<String>,
     }
 
     impl TestLog {
@@ -521,6 +523,8 @@ mod tests {
                 severity_text: None,
                 log_attributes: HashMap::new(),
                 resource_attributes: HashMap::new(),
+                resource_schema_url: None,
+                scope_schema_url: None,
             }
         }
 
@@ -545,6 +549,16 @@ mod tests {
                 .insert(key.to_string(), value.to_string());
             self
         }
+
+        fn with_resource_schema_url(mut self, url: &str) -> Self {
+            self.resource_schema_url = Some(url.to_string());
+            self
+        }
+
+        fn with_scope_schema_url(mut self, url: &str) -> Self {
+            self.scope_schema_url = Some(url.to_string());
+            self
+        }
     }
 
     impl Matchable for TestLog {
@@ -555,6 +569,12 @@ mod tests {
                 LogFieldSelector::Simple(log_field) => match log_field {
                     LogField::Body => self.body.as_deref().map(Cow::Borrowed),
                     LogField::SeverityText => self.severity_text.as_deref().map(Cow::Borrowed),
+                    LogField::ResourceSchemaUrl => {
+                        self.resource_schema_url.as_deref().map(Cow::Borrowed)
+                    }
+                    LogField::ScopeSchemaUrl => {
+                        self.scope_schema_url.as_deref().map(Cow::Borrowed)
+                    }
                     _ => None,
                 },
                 LogFieldSelector::LogAttribute(path) => path
@@ -788,6 +808,28 @@ mod tests {
             field: Some(log_matcher::Field::LogAttribute(attr_path(key))),
             r#match: Some(log_matcher::Match::Regex(pattern.to_string())),
             negate,
+            case_insensitive: false,
+        }
+    }
+
+    fn log_resource_schema_url_matcher(url: &str) -> LogMatcher {
+        LogMatcher {
+            field: Some(log_matcher::Field::LogField(
+                LogField::ResourceSchemaUrl.into(),
+            )),
+            r#match: Some(log_matcher::Match::Exact(url.to_string())),
+            negate: false,
+            case_insensitive: false,
+        }
+    }
+
+    fn log_scope_schema_url_matcher(url: &str) -> LogMatcher {
+        LogMatcher {
+            field: Some(log_matcher::Field::LogField(
+                LogField::ScopeSchemaUrl.into(),
+            )),
+            r#match: Some(log_matcher::Match::Exact(url.to_string())),
+            negate: false,
             case_insensitive: false,
         }
     }
@@ -2258,6 +2300,80 @@ mod tests {
         assert!(matches!(result, EvaluateResult::Sample { keep: true, .. }));
     }
 
+    #[tokio::test]
+    async fn log_evaluate_resource_schema_url() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_policy(
+            "drop-old-schema",
+            vec![log_resource_schema_url_matcher(
+                "https://old-schema/1.0",
+            )],
+            "none",
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Matching schema URL — should drop
+        let log1 = TestLog::new()
+            .with_body("test")
+            .with_resource_schema_url("https://old-schema/1.0");
+        let result1 = engine.evaluate(&snapshot, &log1).await.unwrap();
+        assert_eq!(
+            result1,
+            EvaluateResult::Drop {
+                policy_id: "drop-old-schema".to_string(),
+            }
+        );
+
+        // Different schema URL — should not match
+        let log2 = TestLog::new()
+            .with_body("test")
+            .with_resource_schema_url("https://new-schema/2.0");
+        let result2 = engine.evaluate(&snapshot, &log2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn log_evaluate_scope_schema_url() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_policy(
+            "drop-old-scope-schema",
+            vec![log_scope_schema_url_matcher("https://old-scope/1.0")],
+            "none",
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Matching scope schema URL — should drop
+        let log1 = TestLog::new()
+            .with_body("test")
+            .with_scope_schema_url("https://old-scope/1.0");
+        let result1 = engine.evaluate(&snapshot, &log1).await.unwrap();
+        assert_eq!(
+            result1,
+            EvaluateResult::Drop {
+                policy_id: "drop-old-scope-schema".to_string(),
+            }
+        );
+
+        // Different scope schema URL — should not match
+        let log2 = TestLog::new()
+            .with_body("test")
+            .with_scope_schema_url("https://new-scope/2.0");
+        let result2 = engine.evaluate(&snapshot, &log2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
     // ==================== Metric-specific tests ====================
 
     use crate::engine::signal::MetricSignal;
@@ -2277,6 +2393,9 @@ mod tests {
         datapoint_attributes: HashMap<String, String>,
         resource_attributes: HashMap<String, String>,
         scope_name: Option<String>,
+        scope_version: Option<String>,
+        resource_schema_url: Option<String>,
+        scope_schema_url: Option<String>,
     }
 
     impl TestMetric {
@@ -2290,6 +2409,9 @@ mod tests {
                 datapoint_attributes: HashMap::new(),
                 resource_attributes: HashMap::new(),
                 scope_name: None,
+                scope_version: None,
+                resource_schema_url: None,
+                scope_schema_url: None,
             }
         }
 
@@ -2334,6 +2456,21 @@ mod tests {
             self.scope_name = Some(name.to_string());
             self
         }
+
+        fn with_scope_version(mut self, version: &str) -> Self {
+            self.scope_version = Some(version.to_string());
+            self
+        }
+
+        fn with_resource_schema_url(mut self, url: &str) -> Self {
+            self.resource_schema_url = Some(url.to_string());
+            self
+        }
+
+        fn with_scope_schema_url(mut self, url: &str) -> Self {
+            self.scope_schema_url = Some(url.to_string());
+            self
+        }
     }
 
     impl Matchable for TestMetric {
@@ -2346,6 +2483,15 @@ mod tests {
                     MetricField::Description => self.description.as_deref().map(Cow::Borrowed),
                     MetricField::Unit => self.unit.as_deref().map(Cow::Borrowed),
                     MetricField::ScopeName => self.scope_name.as_deref().map(Cow::Borrowed),
+                    MetricField::ScopeVersion => {
+                        self.scope_version.as_deref().map(Cow::Borrowed)
+                    }
+                    MetricField::ResourceSchemaUrl => {
+                        self.resource_schema_url.as_deref().map(Cow::Borrowed)
+                    }
+                    MetricField::ScopeSchemaUrl => {
+                        self.scope_schema_url.as_deref().map(Cow::Borrowed)
+                    }
                     _ => None,
                 },
                 MetricFieldSelector::DatapointAttribute(path) => path
@@ -2437,6 +2583,39 @@ mod tests {
         MetricMatcher {
             field: Some(metric_matcher::Field::AggregationTemporality(t.into())),
             r#match: None,
+            negate: false,
+            case_insensitive: false,
+        }
+    }
+
+    fn metric_scope_version_exact_matcher(version: &str) -> MetricMatcher {
+        MetricMatcher {
+            field: Some(metric_matcher::Field::MetricField(
+                MetricField::ScopeVersion.into(),
+            )),
+            r#match: Some(metric_matcher::Match::Exact(version.to_string())),
+            negate: false,
+            case_insensitive: false,
+        }
+    }
+
+    fn metric_resource_schema_url_matcher(url: &str) -> MetricMatcher {
+        MetricMatcher {
+            field: Some(metric_matcher::Field::MetricField(
+                MetricField::ResourceSchemaUrl.into(),
+            )),
+            r#match: Some(metric_matcher::Match::Exact(url.to_string())),
+            negate: false,
+            case_insensitive: false,
+        }
+    }
+
+    fn metric_scope_schema_url_matcher(url: &str) -> MetricMatcher {
+        MetricMatcher {
+            field: Some(metric_matcher::Field::MetricField(
+                MetricField::ScopeSchemaUrl.into(),
+            )),
+            r#match: Some(metric_matcher::Match::Exact(url.to_string())),
             negate: false,
             case_insensitive: false,
         }
@@ -2802,6 +2981,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn metric_evaluate_scope_version() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_metric_policy(
+            "drop-old-version",
+            vec![metric_scope_version_exact_matcher("0.1.0")],
+            false,
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Matching scope version — should drop
+        let metric1 = TestMetric::new()
+            .with_name("cpu.usage")
+            .with_scope_version("0.1.0");
+        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        assert_eq!(
+            result1,
+            EvaluateResult::Drop {
+                policy_id: "drop-old-version".to_string(),
+            }
+        );
+
+        // Different version — should not match
+        let metric2 = TestMetric::new()
+            .with_name("cpu.usage")
+            .with_scope_version("1.0.0");
+        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_resource_schema_url() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_metric_policy(
+            "drop-old-schema",
+            vec![metric_resource_schema_url_matcher(
+                "https://old-schema/1.0",
+            )],
+            false,
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Matching schema URL — should drop
+        let metric1 = TestMetric::new()
+            .with_name("cpu.usage")
+            .with_resource_schema_url("https://old-schema/1.0");
+        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        assert_eq!(
+            result1,
+            EvaluateResult::Drop {
+                policy_id: "drop-old-schema".to_string(),
+            }
+        );
+
+        // Different schema URL — should not match
+        let metric2 = TestMetric::new()
+            .with_name("cpu.usage")
+            .with_resource_schema_url("https://new-schema/2.0");
+        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn metric_evaluate_scope_schema_url() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_metric_policy(
+            "drop-old-scope-schema",
+            vec![metric_scope_schema_url_matcher("https://old-scope/1.0")],
+            false,
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Matching scope schema URL — should drop
+        let metric1 = TestMetric::new()
+            .with_name("cpu.usage")
+            .with_scope_schema_url("https://old-scope/1.0");
+        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        assert_eq!(
+            result1,
+            EvaluateResult::Drop {
+                policy_id: "drop-old-scope-schema".to_string(),
+            }
+        );
+
+        // Different scope schema URL — should not match
+        let metric2 = TestMetric::new()
+            .with_name("cpu.usage")
+            .with_scope_schema_url("https://new-scope/2.0");
+        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
     async fn mixed_log_and_metric_policies_signal_isolation() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
@@ -3032,6 +3321,11 @@ mod tests {
         span_status: Option<SpanStatusCode>,
         span_attributes: HashMap<String, String>,
         resource_attributes: HashMap<String, String>,
+        scope_name: Option<String>,
+        scope_version: Option<String>,
+        resource_schema_url: Option<String>,
+        scope_schema_url: Option<String>,
+        event_name: Option<String>,
         /// Written by the engine via `add_field` for `SamplingThreshold`.
         th_value: Option<String>,
     }
@@ -3046,6 +3340,11 @@ mod tests {
                 span_status: None,
                 span_attributes: HashMap::new(),
                 resource_attributes: HashMap::new(),
+                scope_name: None,
+                scope_version: None,
+                resource_schema_url: None,
+                scope_schema_url: None,
+                event_name: None,
                 th_value: None,
             }
         }
@@ -3087,6 +3386,31 @@ mod tests {
                 .insert(key.to_string(), value.to_string());
             self
         }
+
+        fn with_scope_name(mut self, name: &str) -> Self {
+            self.scope_name = Some(name.to_string());
+            self
+        }
+
+        fn with_scope_version(mut self, version: &str) -> Self {
+            self.scope_version = Some(version.to_string());
+            self
+        }
+
+        fn with_resource_schema_url(mut self, url: &str) -> Self {
+            self.resource_schema_url = Some(url.to_string());
+            self
+        }
+
+        fn with_scope_schema_url(mut self, url: &str) -> Self {
+            self.scope_schema_url = Some(url.to_string());
+            self
+        }
+
+        fn with_event_name(mut self, name: &str) -> Self {
+            self.event_name = Some(name.to_string());
+            self
+        }
     }
 
     impl Matchable for TestSpan {
@@ -3098,6 +3422,14 @@ mod tests {
                     TraceField::Name => self.name.as_deref().map(Cow::Borrowed),
                     TraceField::TraceId => self.trace_id.as_deref().map(Cow::Borrowed),
                     TraceField::TraceState => self.tracestate.as_deref().map(Cow::Borrowed),
+                    TraceField::ScopeName => self.scope_name.as_deref().map(Cow::Borrowed),
+                    TraceField::ScopeVersion => self.scope_version.as_deref().map(Cow::Borrowed),
+                    TraceField::ResourceSchemaUrl => {
+                        self.resource_schema_url.as_deref().map(Cow::Borrowed)
+                    }
+                    TraceField::ScopeSchemaUrl => {
+                        self.scope_schema_url.as_deref().map(Cow::Borrowed)
+                    }
                     _ => None,
                 },
                 TraceFieldSelector::SpanKind => self
@@ -3106,6 +3438,9 @@ mod tests {
                 TraceFieldSelector::SpanStatus => self
                     .span_status
                     .map(|s| Cow::Owned(s.as_str_name().to_string())),
+                TraceFieldSelector::EventName => {
+                    self.event_name.as_deref().map(Cow::Borrowed)
+                }
                 TraceFieldSelector::SpanAttribute(path) => path
                     .first()
                     .and_then(|key| self.span_attributes.get(key))
@@ -3201,6 +3536,48 @@ mod tests {
                 },
             )),
             r#match: Some(trace_matcher::Match::Regex(pattern.to_string())),
+            negate: false,
+            case_insensitive: false,
+        }
+    }
+
+    fn trace_event_name_matcher(name: &str) -> TraceMatcher {
+        TraceMatcher {
+            field: Some(trace_matcher::Field::EventName(name.to_string())),
+            r#match: None, // Synthesized by extract_trace_field
+            negate: false,
+            case_insensitive: false,
+        }
+    }
+
+    fn trace_scope_name_matcher(name: &str) -> TraceMatcher {
+        TraceMatcher {
+            field: Some(trace_matcher::Field::TraceField(
+                TraceField::ScopeName.into(),
+            )),
+            r#match: Some(trace_matcher::Match::Exact(name.to_string())),
+            negate: false,
+            case_insensitive: false,
+        }
+    }
+
+    fn trace_resource_schema_url_matcher(url: &str) -> TraceMatcher {
+        TraceMatcher {
+            field: Some(trace_matcher::Field::TraceField(
+                TraceField::ResourceSchemaUrl.into(),
+            )),
+            r#match: Some(trace_matcher::Match::Exact(url.to_string())),
+            negate: false,
+            case_insensitive: false,
+        }
+    }
+
+    fn trace_scope_schema_url_matcher(url: &str) -> TraceMatcher {
+        TraceMatcher {
+            field: Some(trace_matcher::Field::TraceField(
+                TraceField::ScopeSchemaUrl.into(),
+            )),
+            r#match: Some(trace_matcher::Match::Exact(url.to_string())),
             negate: false,
             case_insensitive: false,
         }
@@ -3782,5 +4159,226 @@ mod tests {
         let mut span2 = TestSpan::new().with_name("error"); // matches log pattern but this is a trace
         let result = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
         assert_eq!(result, EvaluateResult::NoMatch); // "error" doesn't match "GET.*"
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_event_name_matcher() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "drop-exception-events",
+            vec![trace_event_name_matcher("exception")],
+            Some(sampling_config(0.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Span with exception event — should match and drop
+        let mut span1 = TestSpan::new()
+            .with_name("GET /api")
+            .with_event_name("exception")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        assert!(matches!(result1, EvaluateResult::Drop { .. }));
+
+        // Span with different event — should not match
+        let mut span2 = TestSpan::new()
+            .with_name("GET /api")
+            .with_event_name("db_query")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+
+        // Span with no event — should not match
+        let mut span3 = TestSpan::new()
+            .with_name("GET /api")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result3 = engine.evaluate_trace(&snapshot, &mut span3).await.unwrap();
+        assert_eq!(result3, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_scope_name_matcher() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "drop-debug-sdk",
+            vec![trace_scope_name_matcher("otel-debug-sdk")],
+            Some(sampling_config(0.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Matching scope name — should drop
+        let mut span1 = TestSpan::new()
+            .with_name("GET /api")
+            .with_scope_name("otel-debug-sdk")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        assert!(matches!(result1, EvaluateResult::Drop { .. }));
+
+        // Different scope name — should not match
+        let mut span2 = TestSpan::new()
+            .with_name("GET /api")
+            .with_scope_name("otel-prod-sdk")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_scope_version_matcher() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "drop-old-version",
+            vec![TraceMatcher {
+                field: Some(trace_matcher::Field::TraceField(
+                    TraceField::ScopeVersion.into(),
+                )),
+                r#match: Some(trace_matcher::Match::Exact("0.1.0".to_string())),
+                negate: false,
+                case_insensitive: false,
+            }],
+            Some(sampling_config(0.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Matching version — should drop
+        let mut span1 = TestSpan::new()
+            .with_name("GET /api")
+            .with_scope_version("0.1.0")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        assert!(matches!(result1, EvaluateResult::Drop { .. }));
+
+        // Different version — should not match
+        let mut span2 = TestSpan::new()
+            .with_name("GET /api")
+            .with_scope_version("1.0.0")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_resource_schema_url() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "drop-old-schema",
+            vec![trace_resource_schema_url_matcher(
+                "https://old-schema/1.0",
+            )],
+            Some(sampling_config(0.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Matching schema URL — should drop
+        let mut span1 = TestSpan::new()
+            .with_name("GET /api")
+            .with_resource_schema_url("https://old-schema/1.0")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        assert!(matches!(result1, EvaluateResult::Drop { .. }));
+
+        // Different schema URL — should not match
+        let mut span2 = TestSpan::new()
+            .with_name("GET /api")
+            .with_resource_schema_url("https://new-schema/2.0")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_scope_schema_url() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "drop-old-scope-schema",
+            vec![trace_scope_schema_url_matcher("https://old-scope/1.0")],
+            Some(sampling_config(0.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Matching scope schema URL — should drop
+        let mut span1 = TestSpan::new()
+            .with_name("GET /api")
+            .with_scope_schema_url("https://old-scope/1.0")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        assert!(matches!(result1, EvaluateResult::Drop { .. }));
+
+        // Different scope schema URL — should not match
+        let mut span2 = TestSpan::new()
+            .with_name("GET /api")
+            .with_scope_schema_url("https://new-scope/2.0")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+    }
+
+    #[tokio::test]
+    async fn trace_evaluate_span_status_unspecified() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "match-unset-status",
+            vec![trace_span_status_matcher(SpanStatusCode::Unspecified)],
+            Some(sampling_config(100.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Span with Unspecified status — should match
+        let mut span1 = TestSpan::new()
+            .with_name("GET /api")
+            .with_span_status(SpanStatusCode::Unspecified)
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        assert!(matches!(result1, EvaluateResult::Keep { .. }));
+
+        // Span with Ok status — should not match
+        let mut span2 = TestSpan::new()
+            .with_name("GET /api")
+            .with_span_status(SpanStatusCode::Ok)
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        assert_eq!(result2, EvaluateResult::NoMatch);
+
+        // Span with no status set — should not match (field doesn't exist)
+        let mut span3 = TestSpan::new()
+            .with_name("GET /api")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result3 = engine.evaluate_trace(&snapshot, &mut span3).await.unwrap();
+        assert_eq!(result3, EvaluateResult::NoMatch);
     }
 }
