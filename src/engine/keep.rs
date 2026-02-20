@@ -59,6 +59,14 @@ impl CompiledKeep {
                 });
             }
 
+            // Clamp boundaries to All/None so downstream sampling logic
+            // never receives 0% or 100% as a Percentage variant.
+            if pct >= 100.0 {
+                return Ok(CompiledKeep::All);
+            }
+            if pct <= 0.0 {
+                return Ok(CompiledKeep::None);
+            }
             return Ok(CompiledKeep::Percentage(pct / 100.0));
         }
 
@@ -144,11 +152,11 @@ mod tests {
         );
         assert_eq!(
             CompiledKeep::parse("100%").unwrap(),
-            CompiledKeep::Percentage(1.0)
+            CompiledKeep::All
         );
         assert_eq!(
             CompiledKeep::parse("0%").unwrap(),
-            CompiledKeep::Percentage(0.0)
+            CompiledKeep::None
         );
         assert_eq!(
             CompiledKeep::parse(" 25 %").unwrap(),
