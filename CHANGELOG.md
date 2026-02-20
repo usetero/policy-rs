@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.8](https://github.com/usetero/policy-rs/compare/v1.4.7...v1.4.8) (2026-02-20)
+
+
+### Bug Fixes
+
+* sampling should use otel when a trace sample key is set ([#55](https://github.com/usetero/policy-rs/issues/55)) ([bbbd90e](https://github.com/usetero/policy-rs/commit/bbbd90ef5090682d0142f1120fbbdca75c7559a3))
+
 ## [1.4.7](https://github.com/usetero/policy-rs/compare/v1.4.6...v1.4.7) (2026-02-18)
 
 
