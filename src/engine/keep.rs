@@ -150,14 +150,8 @@ mod tests {
             CompiledKeep::parse("50%").unwrap(),
             CompiledKeep::Percentage(0.5)
         );
-        assert_eq!(
-            CompiledKeep::parse("100%").unwrap(),
-            CompiledKeep::All
-        );
-        assert_eq!(
-            CompiledKeep::parse("0%").unwrap(),
-            CompiledKeep::None
-        );
+        assert_eq!(CompiledKeep::parse("100%").unwrap(), CompiledKeep::All);
+        assert_eq!(CompiledKeep::parse("0%").unwrap(), CompiledKeep::None);
         assert_eq!(
             CompiledKeep::parse(" 25 %").unwrap(),
             CompiledKeep::Percentage(0.25)
