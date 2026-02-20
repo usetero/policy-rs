@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn sample_log_no_value_returns_keep() {
-        // No sample key value → fall back to keep
+        // No sample key value → fall back to keep (for non-boundary percentages)
         assert!(should_sample_log(0.5, None));
         assert!(should_sample_log(0.5, Some("")));
         assert!(should_sample_log(0.01, None));
