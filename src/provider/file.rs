@@ -823,8 +823,7 @@ impl JsonTraceField {
     fn into_proto(self, policy_id: &str) -> Result<trace_matcher::Field, PolicyError> {
         match self {
             Self::TraceField(name) => {
-                let f = pb::TraceField::from_str_name(&name)
-                    .ok_or_else(|| invalid(policy_id, &format!("unknown trace_field: '{name}'")))?;
+                let f = parse_trace_field_name(policy_id, &name)?;
                 Ok(trace_matcher::Field::TraceField(f as i32))
             }
             Self::SpanAttribute(path) => Ok(trace_matcher::Field::SpanAttribute(path.into_proto())),
@@ -840,7 +839,14 @@ impl JsonTraceField {
                 Ok(trace_matcher::Field::SpanKind(k as i32))
             }
             Self::SpanStatus(name) => {
-                let s = pb::SpanStatusCode::from_str_name(&name)
+                // Accept "SPAN_STATUS_CODE_UNSET" as an alias for the proto's
+                // "SPAN_STATUS_CODE_UNSPECIFIED" (OTel spec uses "Unset").
+                let canonical = if name == "SPAN_STATUS_CODE_UNSET" {
+                    "SPAN_STATUS_CODE_UNSPECIFIED"
+                } else {
+                    &name
+                };
+                let s = pb::SpanStatusCode::from_str_name(canonical)
                     .ok_or_else(|| invalid(policy_id, &format!("unknown span_status: '{name}'")))?;
                 Ok(trace_matcher::Field::SpanStatus(s as i32))
             }
@@ -934,6 +940,22 @@ fn parse_log_field_name(policy_id: &str, name: &str) -> Result<pb::LogField, Pol
         "resource_schema_url" => Ok(pb::LogField::ResourceSchemaUrl),
         "scope_schema_url" => Ok(pb::LogField::ScopeSchemaUrl),
         _ => Err(invalid(policy_id, &format!("unknown log_field: '{name}'"))),
+    }
+}
+
+fn parse_trace_field_name(policy_id: &str, name: &str) -> Result<pb::TraceField, PolicyError> {
+    match name {
+        "name" => Ok(pb::TraceField::Name),
+        "trace_id" => Ok(pb::TraceField::TraceId),
+        "span_id" => Ok(pb::TraceField::SpanId),
+        "parent_span_id" => Ok(pb::TraceField::ParentSpanId),
+        "trace_state" => Ok(pb::TraceField::TraceState),
+        "resource_schema_url" => Ok(pb::TraceField::ResourceSchemaUrl),
+        "scope_schema_url" => Ok(pb::TraceField::ScopeSchemaUrl),
+        "scope_name" => Ok(pb::TraceField::ScopeName),
+        "scope_version" => Ok(pb::TraceField::ScopeVersion),
+        _ => pb::TraceField::from_str_name(name)
+            .ok_or_else(|| invalid(policy_id, &format!("unknown trace_field: '{name}'"))),
     }
 }
 
@@ -1891,6 +1913,87 @@ mod tests {
         assert!(matches!(
             matcher.field,
             Some(trace_matcher::Field::SpanKind(k)) if k == pb::SpanKind::Internal as i32
+        ));
+    }
+
+    #[test]
+    fn load_trace_policy_with_shorthand_field_names() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "trace-scope",
+                    "name": "Match by scope name",
+                    "trace": {
+                        "match": [
+                            { "trace_field": "scope_name", "exact": "otel-sdk" },
+                            { "trace_field": "scope_version", "exact": "1.0.0" },
+                            { "trace_field": "resource_schema_url", "exact": "https://schema/1.0" },
+                            { "trace_field": "scope_schema_url", "exact": "https://scope/1.0" },
+                            { "trace_field": "name", "regex": "GET.*" }
+                        ],
+                        "keep": { "percentage": 100.0 }
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        assert_eq!(policies.len(), 1);
+        let trace_target = policies[0].trace_target().unwrap();
+        assert_eq!(trace_target.r#match.len(), 5);
+
+        // Verify each shorthand resolved to the correct proto field
+        let fields: Vec<_> = trace_target
+            .r#match
+            .iter()
+            .filter_map(|m| match &m.field {
+                Some(trace_matcher::Field::TraceField(f)) => Some(*f),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            fields,
+            vec![
+                pb::TraceField::ScopeName as i32,
+                pb::TraceField::ScopeVersion as i32,
+                pb::TraceField::ResourceSchemaUrl as i32,
+                pb::TraceField::ScopeSchemaUrl as i32,
+                pb::TraceField::Name as i32,
+            ]
+        );
+    }
+
+    #[test]
+    fn load_trace_policy_with_span_status_unset() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "match-unset",
+                    "name": "Match unset status",
+                    "trace": {
+                        "match": [
+                            { "span_status": "SPAN_STATUS_CODE_UNSET", "exists": true }
+                        ],
+                        "keep": { "percentage": 100.0 }
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        assert_eq!(policies.len(), 1);
+        let trace_target = policies[0].trace_target().unwrap();
+        let matcher = &trace_target.r#match[0];
+        // SPAN_STATUS_CODE_UNSET should map to Unspecified (value 0)
+        assert!(matches!(
+            matcher.field,
+            Some(trace_matcher::Field::SpanStatus(s)) if s == pb::SpanStatusCode::Unspecified as i32
         ));
     }
 
