@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.9](https://github.com/usetero/policy-rs/compare/v1.4.8...v1.4.9) (2026-02-20)
+
+
+### Bug Fixes
+
+* prevent out of bounds for percentage sampling ([#57](https://github.com/usetero/policy-rs/issues/57)) ([bccd8f2](https://github.com/usetero/policy-rs/commit/bccd8f2a2154332ac5c8a8505c123bdf4ee65363))
+* support missing fields and parsing rules ([#59](https://github.com/usetero/policy-rs/issues/59)) ([588ce92](https://github.com/usetero/policy-rs/commit/588ce929ac292b4791d5bd39b6f45e15abe26320))
+
 ## [1.4.8](https://github.com/usetero/policy-rs/compare/v1.4.7...v1.4.8) (2026-02-20)
 
 
