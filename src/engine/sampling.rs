@@ -219,9 +219,7 @@ mod tests {
     #[test]
     fn sample_log_with_hash_key_is_consistent() {
         let key = "request-123";
-        let decisions: Vec<bool> = (0..10)
-            .map(|_| should_sample_log(0.5, Some(key)))
-            .collect();
+        let decisions: Vec<bool> = (0..10).map(|_| should_sample_log(0.5, Some(key))).collect();
 
         let first = decisions[0];
         assert!(
