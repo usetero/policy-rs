@@ -1402,6 +1402,88 @@ mod tests {
     }
 
     #[test]
+    fn load_policy_with_rate_limit_per_second() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "rate-limit-policy",
+                    "name": "Rate Limit Policy",
+                    "log": {
+                        "match": [
+                            { "log_field": "body", "regex": ".*" }
+                        ],
+                        "keep": "3/s"
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        assert_eq!(policies.len(), 1);
+        let log_target = policies[0].log_target().unwrap();
+        assert_eq!(log_target.keep, "3/s");
+    }
+
+    #[test]
+    fn load_policy_with_rate_limit_per_minute() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "rate-limit-policy",
+                    "name": "Rate Limit Policy",
+                    "log": {
+                        "match": [
+                            { "log_field": "body", "regex": ".*" }
+                        ],
+                        "keep": "100/m"
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        assert_eq!(policies.len(), 1);
+        let log_target = policies[0].log_target().unwrap();
+        assert_eq!(log_target.keep, "100/m");
+    }
+
+    #[test]
+    fn load_policy_with_rate_limit_and_sample_key() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "rate-limit-sample-key",
+                    "name": "Rate Limit with Sample Key",
+                    "log": {
+                        "match": [
+                            { "log_field": "body", "regex": ".*" }
+                        ],
+                        "keep": "3/s",
+                        "sample_key": {
+                            "log_attribute": "request_id"
+                        }
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        assert_eq!(policies.len(), 1);
+        let log_target = policies[0].log_target().unwrap();
+        assert_eq!(log_target.keep, "3/s");
+        assert!(log_target.sample_key.is_some());
+    }
+
+    #[test]
     fn load_policy_with_all_features() {
         let content = r#"{
             "policies": [
