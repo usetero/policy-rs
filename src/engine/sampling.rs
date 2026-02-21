@@ -147,6 +147,92 @@ pub(crate) fn parse_trace_id_randomness(trace_id: &str) -> Option<u64> {
         .map(|v| v & RANDOMNESS_MASK)
 }
 
+/// Parse the `th` (threshold) value from an OTel tracestate entry.
+///
+/// The `th` sub-key encodes the rejection threshold as 1-14 hex digits
+/// (right-padded with zeros to 14 digits). This represents the incoming
+/// sampling threshold from upstream collectors.
+pub(crate) fn parse_tracestate_th(tracestate: &str) -> Option<u64> {
+    for entry in tracestate.split(',') {
+        let entry = entry.trim();
+        if let Some(value) = entry.strip_prefix("ot=") {
+            for sub_key in value.split(';') {
+                if let Some(th_hex) = sub_key.strip_prefix("th:") {
+                    // Right-pad to 14 hex digits (same encoding as rv)
+                    let padded = format!("{:0<14}", th_hex);
+                    return u64::from_str_radix(&padded, 16)
+                        .ok()
+                        .map(|v| v & RANDOMNESS_MASK);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Convert a 56-bit rejection threshold back to a probability (0.0–1.0).
+///
+/// Inverse of `rejection_threshold`: probability = 1.0 - (threshold / 2^56).
+pub(crate) fn threshold_to_probability(threshold: u64) -> f64 {
+    if threshold == 0 {
+        return 1.0;
+    }
+    if threshold >= MAX_THRESHOLD {
+        return 0.0;
+    }
+    1.0 - (threshold as f64 / MAX_THRESHOLD as f64)
+}
+
+/// Compute 56-bit randomness from a trace ID combined with a hash seed.
+///
+/// When `hash_seed` is 0, this is equivalent to `parse_trace_id_randomness`
+/// (uses the least-significant 56 bits directly). When non-zero, the trace ID
+/// bytes are hashed together with the seed using FNV-1a to produce deterministic
+/// but seed-specific randomness.
+pub(crate) fn hash_seed_randomness(trace_id: &str, hash_seed: u32) -> Option<u64> {
+    if hash_seed == 0 {
+        return parse_trace_id_randomness(trace_id);
+    }
+    if trace_id.len() < 14 {
+        return None;
+    }
+    let mut hasher = fnv::FnvHasher::default();
+    hasher.write(trace_id.as_bytes());
+    hasher.write_u32(hash_seed);
+    Some(hasher.finish() & RANDOMNESS_MASK)
+}
+
+/// Extract randomness for hash_seed mode.
+///
+/// Tries two sources in order:
+/// 1. The `rv` sub-key from the OTel tracestate entry (if hash_seed is 0)
+/// 2. The TraceID hashed with the seed
+///
+/// When hash_seed is non-zero, the `rv` sub-key is ignored because the seed
+/// produces different randomness than the original trace ID randomness.
+pub(crate) fn extract_hash_seed_randomness<T: Matchable<Signal = TraceSignal>>(
+    span: &T,
+    hash_seed: u32,
+) -> Option<u64> {
+    if hash_seed == 0 {
+        // Seed 0 is compatible with standard OTel randomness
+        return extract_trace_randomness(span);
+    }
+    // Non-zero seed: hash the trace ID with the seed
+    let trace_id = span.get_field(&TraceFieldSelector::Simple(TraceField::TraceId))?;
+    hash_seed_randomness(&trace_id, hash_seed)
+}
+
+/// Extract the incoming threshold from tracestate for proportional/equalizing modes.
+///
+/// Returns the `th` sub-key from the OTel tracestate, or `None` if not present.
+pub(crate) fn extract_incoming_threshold<T: Matchable<Signal = TraceSignal>>(
+    span: &T,
+) -> Option<u64> {
+    let tracestate = span.get_field(&TraceFieldSelector::Simple(TraceField::TraceState))?;
+    parse_tracestate_th(&tracestate)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,5 +466,194 @@ mod tests {
         assert_eq!(result.unwrap(), expected);
 
         assert_eq!(parse_trace_id_randomness("abc"), None);
+    }
+
+    // ==================== parse_tracestate_th tests ====================
+
+    #[test]
+    fn parse_tracestate_th_basic() {
+        assert_eq!(
+            parse_tracestate_th("ot=th:8"),
+            Some(0x80000000000000)
+        );
+    }
+
+    #[test]
+    fn parse_tracestate_th_full_precision() {
+        assert_eq!(
+            parse_tracestate_th("ot=th:abcdef12345678"),
+            Some(0xabcdef12345678)
+        );
+    }
+
+    #[test]
+    fn parse_tracestate_th_with_other_subkeys() {
+        assert_eq!(
+            parse_tracestate_th("ot=rv:abc;th:8"),
+            Some(0x80000000000000)
+        );
+    }
+
+    #[test]
+    fn parse_tracestate_th_with_other_vendors() {
+        assert_eq!(
+            parse_tracestate_th("vendor1=foo,ot=th:4,vendor2=bar"),
+            Some(0x40000000000000)
+        );
+    }
+
+    #[test]
+    fn parse_tracestate_th_zero() {
+        assert_eq!(
+            parse_tracestate_th("ot=th:0"),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn parse_tracestate_th_missing() {
+        assert_eq!(parse_tracestate_th("ot=rv:abc"), None);
+        assert_eq!(parse_tracestate_th("vendor1=foo"), None);
+        assert_eq!(parse_tracestate_th(""), None);
+    }
+
+    #[test]
+    fn parse_tracestate_th_roundtrip_with_encode() {
+        // Encode a threshold then parse it back
+        let threshold = rejection_threshold(0.5); // 50% → threshold at ~2^55
+        let encoded = encode_threshold(threshold, 14);
+        let tracestate = format!("ot=th:{}", encoded);
+        let parsed = parse_tracestate_th(&tracestate).unwrap();
+        // Due to right-padding, the parsed value should match the original
+        assert_eq!(parsed, threshold);
+    }
+
+    // ==================== threshold_to_probability tests ====================
+
+    #[test]
+    fn threshold_to_probability_edge_cases() {
+        assert_eq!(threshold_to_probability(0), 1.0);
+        assert_eq!(threshold_to_probability(MAX_THRESHOLD), 0.0);
+    }
+
+    #[test]
+    fn threshold_to_probability_roundtrip() {
+        let probabilities = [0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99];
+        for p in probabilities {
+            let th = rejection_threshold(p);
+            let p_back = threshold_to_probability(th);
+            assert!(
+                (p - p_back).abs() < 1e-10,
+                "Roundtrip failed for {}: got {}",
+                p,
+                p_back
+            );
+        }
+    }
+
+    // ==================== hash_seed_randomness tests ====================
+
+    #[test]
+    fn hash_seed_zero_matches_parse_trace_id() {
+        let trace_id = "0af7651916cd43dd8448eb211c80319c";
+        let seeded = hash_seed_randomness(trace_id, 0);
+        let direct = parse_trace_id_randomness(trace_id);
+        assert_eq!(seeded, direct);
+    }
+
+    #[test]
+    fn hash_seed_nonzero_differs_from_direct() {
+        let trace_id = "0af7651916cd43dd8448eb211c80319c";
+        let seeded = hash_seed_randomness(trace_id, 42).unwrap();
+        let direct = parse_trace_id_randomness(trace_id).unwrap();
+        assert_ne!(seeded, direct, "Non-zero seed should produce different randomness");
+    }
+
+    #[test]
+    fn hash_seed_deterministic() {
+        let trace_id = "0af7651916cd43dd8448eb211c80319c";
+        let r1 = hash_seed_randomness(trace_id, 42);
+        let r2 = hash_seed_randomness(trace_id, 42);
+        assert_eq!(r1, r2, "Same trace_id + seed should always produce same result");
+    }
+
+    #[test]
+    fn hash_seed_different_seeds_different_randomness() {
+        let trace_id = "0af7651916cd43dd8448eb211c80319c";
+        let r1 = hash_seed_randomness(trace_id, 1).unwrap();
+        let r2 = hash_seed_randomness(trace_id, 2).unwrap();
+        assert_ne!(r1, r2, "Different seeds should produce different randomness");
+    }
+
+    #[test]
+    fn hash_seed_produces_56_bit_values() {
+        for seed in [1, 42, 100, 1000, u32::MAX] {
+            let r = hash_seed_randomness("0af7651916cd43dd8448eb211c80319c", seed).unwrap();
+            assert!(r < MAX_THRESHOLD, "Hash seed {} produced out-of-range value {}", seed, r);
+        }
+    }
+
+    #[test]
+    fn hash_seed_short_trace_id_returns_none() {
+        assert_eq!(hash_seed_randomness("abc", 42), None);
+    }
+
+    #[test]
+    fn hash_seed_same_trace_id_different_seeds_distribution() {
+        // Verify that different seeds produce well-distributed randomness
+        // by checking that a reasonable fraction fall above/below the midpoint
+        let trace_id = "0af7651916cd43dd8448eb211c80319c";
+        let midpoint = MAX_THRESHOLD / 2;
+        let total = 1000u32;
+        let above = (0..total)
+            .filter(|&seed| hash_seed_randomness(trace_id, seed).unwrap() >= midpoint)
+            .count();
+        assert!(
+            above > 350 && above < 650,
+            "Expected ~50% above midpoint, got {}/{}", above, total
+        );
+    }
+
+    #[test]
+    fn hash_seed_consistent_sampling_across_trace_ids() {
+        // With a given seed and 50% threshold, verify ~50% of trace IDs are kept
+        let threshold = rejection_threshold(0.5);
+        let kept = (0..1000u64)
+            .map(|i| format!("{:032x}", i))
+            .filter(|tid| {
+                hash_seed_randomness(tid, 42).unwrap() >= threshold
+            })
+            .count();
+        assert!(
+            kept > 400 && kept < 600,
+            "Expected ~50% kept with seed 42, got {}/1000", kept
+        );
+    }
+
+    #[test]
+    fn hash_seed_superset_property() {
+        // Core OTel property: if kept at probability P, must also be kept at P' > P
+        let trace_ids: Vec<String> = (0..200u64).map(|i| format!("{:032x}", i)).collect();
+        let probabilities = [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99];
+        let seed = 42;
+
+        for tid in &trace_ids {
+            let r = hash_seed_randomness(tid, seed).unwrap();
+            let mut was_kept = false;
+            for &p in &probabilities {
+                let th = rejection_threshold(p);
+                let kept = r >= th;
+                if was_kept {
+                    assert!(
+                        kept,
+                        "Trace ID '{}' with seed {} was kept at lower probability but dropped at {}",
+                        tid, seed, p
+                    );
+                }
+                if kept {
+                    was_kept = true;
+                }
+            }
+        }
     }
 }

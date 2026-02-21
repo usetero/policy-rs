@@ -11,7 +11,8 @@ mod transform;
 mod transformable;
 
 pub use compiled::{
-    CompiledDatabase, CompiledMatchers, CompiledPolicy, CompiledTraceSampling, ExistenceCheck,
+    CompiledDatabase, CompiledMatchers, CompiledPolicy, CompiledSamplingMode,
+    CompiledTraceSampling, ExistenceCheck,
 };
 pub use keep::CompiledKeep;
 pub use match_key::MatchKey;
@@ -28,7 +29,8 @@ use crate::field::TraceFieldSelector;
 use crate::registry::PolicySnapshot;
 
 use self::sampling::{
-    encode_threshold, extract_trace_randomness, rejection_threshold, should_sample_log,
+    encode_threshold, extract_hash_seed_randomness, extract_incoming_threshold,
+    extract_trace_randomness, rejection_threshold, should_sample_log, threshold_to_probability,
 };
 
 /// Result of evaluating a log record against policies.
@@ -332,47 +334,144 @@ impl PolicyEngine {
             _ => {}
         }
 
-        // Extract randomness for sampling decision
-        let randomness = extract_trace_randomness(span);
+        // Mode-specific sampling decision
+        match trace_sampling.mode {
+            CompiledSamplingMode::HashSeed => {
+                let randomness =
+                    extract_hash_seed_randomness(span, trace_sampling.hash_seed);
 
-        match randomness {
-            Some(r) => {
-                let keep = r >= trace_sampling.threshold;
-
-                if keep {
-                    // Write th value to span for downstream propagation
-                    span.add_field(
-                        &TraceFieldSelector::SamplingThreshold,
-                        &encode_threshold(trace_sampling.threshold, trace_sampling.precision),
-                        true,
-                    );
+                match randomness {
+                    Some(r) => {
+                        let keep = r >= trace_sampling.threshold;
+                        if keep {
+                            span.add_field(
+                                &TraceFieldSelector::SamplingThreshold,
+                                &encode_threshold(
+                                    trace_sampling.threshold,
+                                    trace_sampling.precision,
+                                ),
+                                true,
+                            );
+                        }
+                        record_match_stats(compiled, &matching, keep);
+                        Ok(EvaluateResult::Sample {
+                            policy_id: winner.id.clone(),
+                            percentage: trace_sampling.probability * 100.0,
+                            keep,
+                            transformed: keep,
+                        })
+                    }
+                    None => fail_or_open(trace_sampling, compiled, &matching, &winner.id),
                 }
-
-                record_match_stats(compiled, &matching, keep);
-                Ok(EvaluateResult::Sample {
-                    policy_id: winner.id.clone(),
-                    percentage: trace_sampling.probability * 100.0,
-                    keep,
-                    transformed: keep,
-                })
             }
-            None => {
-                // No randomness available — respect fail_closed setting
-                let will_keep = !trace_sampling.fail_closed;
-                record_match_stats(compiled, &matching, will_keep);
-                if trace_sampling.fail_closed {
-                    Ok(EvaluateResult::Drop {
-                        policy_id: winner.id.clone(),
-                    })
-                } else {
-                    // Fail open — keep without writing th
-                    Ok(EvaluateResult::Keep {
-                        policy_id: winner.id.clone(),
-                        transformed: false,
-                    })
+            CompiledSamplingMode::Proportional => {
+                // Proportional downstream sampler per OTel spec:
+                //   T_o = ProbabilityToThreshold(p * ThresholdToProbability(T_s))
+                //   If R >= T_o → selected with outbound threshold T_o
+                //   Otherwise → not sampled
+                //
+                // Where p is the configured probability and T_s is the incoming
+                // threshold. When no incoming threshold exists, T_s = 0 (100%
+                // incoming probability), so T_o = rejection_threshold(p * 1.0)
+                // = our precomputed target threshold.
+                let incoming_th = extract_incoming_threshold(span);
+                let randomness = extract_trace_randomness(span);
+
+                match randomness {
+                    Some(r) => {
+                        // Compute the product threshold T_o
+                        let inc_prob = incoming_th
+                            .map(threshold_to_probability)
+                            .unwrap_or(1.0);
+                        let product_prob =
+                            (trace_sampling.probability * inc_prob).clamp(0.0, 1.0);
+                        let t_o = rejection_threshold(product_prob);
+
+                        let keep = r >= t_o;
+                        if keep {
+                            span.add_field(
+                                &TraceFieldSelector::SamplingThreshold,
+                                &encode_threshold(t_o, trace_sampling.precision),
+                                true,
+                            );
+                        }
+                        record_match_stats(compiled, &matching, keep);
+                        Ok(EvaluateResult::Sample {
+                            policy_id: winner.id.clone(),
+                            percentage: trace_sampling.probability * 100.0,
+                            keep,
+                            transformed: keep,
+                        })
+                    }
+                    None => fail_or_open(trace_sampling, compiled, &matching, &winner.id),
+                }
+            }
+            CompiledSamplingMode::Equalizing => {
+                // Equalizing mode preferentially keeps spans that have been
+                // sampled at lower rates (higher thresholds). If the incoming
+                // threshold is at least as restrictive as ours, the span is
+                // already rare — keep it. Otherwise apply our threshold directly.
+                let incoming_th = extract_incoming_threshold(span);
+                let randomness = extract_trace_randomness(span);
+
+                match randomness {
+                    Some(r) => {
+                        let (keep, effective_th) = match incoming_th {
+                            Some(inc_th) if inc_th >= trace_sampling.threshold => {
+                                // Already sampled at or below our target rate — keep
+                                // and preserve the incoming threshold.
+                                (true, inc_th)
+                            }
+                            _ => {
+                                // Not previously sampled or sampled at a higher rate
+                                // than our target. Apply our target threshold directly
+                                // to equalize all sources to the same rate.
+                                (r >= trace_sampling.threshold, trace_sampling.threshold)
+                            }
+                        };
+
+                        if keep {
+                            span.add_field(
+                                &TraceFieldSelector::SamplingThreshold,
+                                &encode_threshold(effective_th, trace_sampling.precision),
+                                true,
+                            );
+                        }
+                        record_match_stats(compiled, &matching, keep);
+                        Ok(EvaluateResult::Sample {
+                            policy_id: winner.id.clone(),
+                            percentage: trace_sampling.probability * 100.0,
+                            keep,
+                            transformed: keep,
+                        })
+                    }
+                    None => fail_or_open(trace_sampling, compiled, &matching, &winner.id),
                 }
             }
         }
+    }
+}
+
+/// Handle the case where no randomness is available for trace sampling.
+///
+/// Respects the `fail_closed` setting: if true, drops the span; if false, keeps it.
+fn fail_or_open(
+    trace_sampling: &CompiledTraceSampling,
+    compiled: &CompiledMatchers<TraceSignal>,
+    matching: &[usize],
+    policy_id: &str,
+) -> Result<EvaluateResult, PolicyError> {
+    let will_keep = !trace_sampling.fail_closed;
+    record_match_stats(compiled, matching, will_keep);
+    if trace_sampling.fail_closed {
+        Ok(EvaluateResult::Drop {
+            policy_id: policy_id.to_string(),
+        })
+    } else {
+        Ok(EvaluateResult::Keep {
+            policy_id: policy_id.to_string(),
+            transformed: false,
+        })
     }
 }
 
@@ -3299,9 +3398,10 @@ mod tests {
 
     use crate::engine::signal::TraceSignal;
     use crate::field::TraceFieldSelector;
+    use crate::engine::sampling::MAX_THRESHOLD;
     use crate::proto::tero::policy::v1::{
-        SpanKind, SpanStatusCode, TraceField, TraceMatcher, TraceSamplingConfig, TraceTarget,
-        trace_matcher,
+        SamplingMode, SpanKind, SpanStatusCode, TraceField, TraceMatcher, TraceSamplingConfig,
+        TraceTarget, trace_matcher,
     };
 
     /// Test span implementation for trace evaluation tests.
@@ -4368,5 +4468,1116 @@ mod tests {
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
         let result3 = engine.evaluate_trace(&snapshot, &mut span3).await.unwrap();
         assert_eq!(result3, EvaluateResult::NoMatch);
+    }
+
+    // ==================== Sampling Mode Tests ====================
+
+    // Generate a trace ID whose last 14 hex chars are spread across the full
+    // 56-bit range. Uses a multiplier to distribute i values evenly.
+    fn distributed_trace_id(i: u64) -> String {
+        // Golden ratio constant scaled to 56-bit range for even distribution
+        let randomness = i.wrapping_mul(0x9E3779B97F4A7) & (MAX_THRESHOLD - 1);
+        trace_id_with_randomness(randomness)
+    }
+
+    fn sampling_config_with_mode(percentage: f32, mode: SamplingMode) -> TraceSamplingConfig {
+        TraceSamplingConfig {
+            percentage,
+            mode: Some(mode as i32),
+            sampling_precision: Some(4),
+            hash_seed: None,
+            fail_closed: Some(true),
+        }
+    }
+
+    fn sampling_config_with_seed(percentage: f32, hash_seed: u32) -> TraceSamplingConfig {
+        TraceSamplingConfig {
+            percentage,
+            mode: Some(SamplingMode::HashSeed as i32),
+            sampling_precision: Some(4),
+            hash_seed: Some(hash_seed),
+            fail_closed: Some(true),
+        }
+    }
+
+    // ==================== HashSeed Mode Tests ====================
+
+    #[tokio::test]
+    async fn hash_seed_mode_default_seed_matches_basic_behavior() {
+        // With seed=0 (default), hash_seed mode should behave identically
+        // to the original implementation (trace ID randomness directly).
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "hash-seed-default",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(50.0, SamplingMode::HashSeed)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let threshold = rejection_threshold(0.5);
+
+        // High randomness → kept
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(threshold + 1));
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        match &result {
+            EvaluateResult::Sample { keep, .. } => assert!(keep),
+            _ => panic!("expected Sample, got {:?}", result),
+        }
+
+        // Low randomness → dropped
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(threshold - 1));
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        match &result {
+            EvaluateResult::Sample { keep, .. } => assert!(!keep),
+            _ => panic!("expected Sample, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn hash_seed_mode_nonzero_seed_changes_decisions() {
+        // A non-zero seed should produce different keep/drop decisions
+        // compared to seed=0 for the same trace IDs.
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "hash-seed-42",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_seed(50.0, 42)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Run many trace IDs and verify ~50% are kept
+        let mut kept = 0;
+        let total = 500;
+        for i in 0..total {
+            let trace_id = distributed_trace_id(i);
+            let mut span = TestSpan::new()
+                .with_name("test")
+                .with_trace_id(&trace_id);
+            let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+            if let EvaluateResult::Sample { keep: true, .. } = result {
+                kept += 1;
+            }
+        }
+        assert!(
+            kept > 200 && kept < 300,
+            "Expected ~50% kept with seed 42, got {}/{}",
+            kept,
+            total,
+        );
+    }
+
+    #[tokio::test]
+    async fn hash_seed_mode_different_seeds_different_sets() {
+        // Two different seeds at the same percentage should keep different
+        // subsets of trace IDs (with high probability).
+        let trace_ids: Vec<String> = (0..500u64).map(distributed_trace_id).collect();
+        let engine = PolicyEngine::new();
+
+        let mut results_seed1 = Vec::new();
+        let mut results_seed2 = Vec::new();
+
+        for seed in [1u32, 1000] {
+            let registry = PolicyRegistry::new();
+            let handle = registry.register_provider();
+            let policy = make_trace_policy(
+                "test",
+                vec![trace_name_regex_matcher(".+", false)],
+                Some(sampling_config_with_seed(50.0, seed)),
+                true,
+            );
+            handle.update(vec![policy]);
+            let snapshot = registry.snapshot();
+
+            for tid in &trace_ids {
+                let mut span = TestSpan::new().with_name("test").with_trace_id(tid);
+                let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+                let kept = matches!(result, EvaluateResult::Sample { keep: true, .. });
+                if seed == 1 {
+                    results_seed1.push(kept);
+                } else {
+                    results_seed2.push(kept);
+                }
+            }
+        }
+
+        // Count differences — with independent hash functions, ~50% of spans
+        // should differ in keep/drop between two seeds at 50% sampling rate.
+        let differences: usize = results_seed1
+            .iter()
+            .zip(results_seed2.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(
+            differences > 50,
+            "Expected different seeds to produce different decisions, only {} differences out of {}",
+            differences,
+            trace_ids.len(),
+        );
+    }
+
+    #[tokio::test]
+    async fn hash_seed_mode_deterministic() {
+        // Same seed + same trace ID should always produce the same decision.
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "deterministic",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_seed(50.0, 99)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let trace_id = "0af7651916cd43dd8448eb211c80319c";
+
+        let mut first_result = None;
+        for _ in 0..10 {
+            let mut span = TestSpan::new()
+                .with_name("test")
+                .with_trace_id(trace_id);
+            let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+            let kept = matches!(result, EvaluateResult::Sample { keep: true, .. });
+            if let Some(first) = first_result {
+                assert_eq!(kept, first, "Decisions must be consistent for same input");
+            } else {
+                first_result = Some(kept);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn hash_seed_mode_100_percent() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "keep-all",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_seed(100.0, 42)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        assert!(matches!(result, EvaluateResult::Keep { .. }));
+        assert_eq!(span.th_value, Some("0".to_string()));
+    }
+
+    #[tokio::test]
+    async fn hash_seed_mode_0_percent() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "drop-all",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_seed(0.0, 42)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        assert!(matches!(result, EvaluateResult::Drop { .. }));
+    }
+
+    #[tokio::test]
+    async fn hash_seed_mode_seed_zero_uses_tracestate_rv() {
+        // With seed=0, the rv sub-key from tracestate should be preferred.
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "seed-0-rv",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_seed(50.0, 0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let threshold = rejection_threshold(0.5);
+        let high_rv = threshold + 1000;
+
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(0)) // low (would drop)
+            .with_tracestate(&format!("ot=rv:{:014x}", high_rv));
+
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        match &result {
+            EvaluateResult::Sample { keep, .. } => {
+                assert!(keep, "Seed 0 should use tracestate rv (high) over trace_id (low)");
+            }
+            _ => panic!("expected Sample, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn hash_seed_mode_nonzero_seed_ignores_tracestate_rv() {
+        // With non-zero seed, the rv sub-key should be ignored.
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "seed-42-no-rv",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_seed(50.0, 42)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Run many trace IDs with a tracestate rv that would always keep (high value)
+        // and verify that some are still dropped (seed doesn't use rv)
+        let high_rv = MAX_THRESHOLD - 1;
+        let mut dropped = 0;
+        for i in 0..200u64 {
+            let trace_id = distributed_trace_id(i);
+            let mut span = TestSpan::new()
+                .with_name("test")
+                .with_trace_id(&trace_id)
+                .with_tracestate(&format!("ot=rv:{:014x}", high_rv));
+            let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+            if let EvaluateResult::Sample { keep: false, .. } = result {
+                dropped += 1;
+            }
+        }
+        assert!(
+            dropped > 50,
+            "Non-zero seed should ignore rv and drop ~50%, but only dropped {}/200",
+            dropped,
+        );
+    }
+
+    #[tokio::test]
+    async fn hash_seed_mode_fail_closed_no_trace_id() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "fail-closed-seed",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_seed(50.0, 42)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let mut span = TestSpan::new().with_name("test"); // no trace_id
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        assert!(matches!(result, EvaluateResult::Drop { .. }));
+    }
+
+    // ==================== Proportional Mode Tests ====================
+
+    #[tokio::test]
+    async fn proportional_mode_no_incoming_th_applies_target() {
+        // Without an incoming th in tracestate, proportional mode should
+        // apply the target threshold directly (same as hash_seed mode).
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "proportional-no-th",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(50.0, SamplingMode::Proportional)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let threshold = rejection_threshold(0.5);
+
+        // High randomness → kept
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(threshold + 1));
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        match &result {
+            EvaluateResult::Sample { keep, .. } => {
+                assert!(keep);
+                assert!(span.th_value.is_some());
+            }
+            _ => panic!("expected Sample, got {:?}", result),
+        }
+
+        // Low randomness → dropped
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(threshold - 1));
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        match &result {
+            EvaluateResult::Sample { keep, .. } => assert!(!keep),
+            _ => panic!("expected Sample, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn proportional_mode_multiplies_incoming_probability() {
+        // Per OTel spec: T_o = ProbabilityToThreshold(p * ThresholdToProbability(T_s))
+        // With p=0.5 and incoming at 10% (T_s for 10%), the product probability
+        // is 0.5 * 0.1 = 0.05, so T_o = rejection_threshold(0.05).
+        // Only spans with R >= T_o are kept.
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "proportional-multiply",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(50.0, SamplingMode::Proportional)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Incoming: 10% sampling
+        let incoming_th = rejection_threshold(0.1);
+        let tracestate = format!("ot=th:{}", super::sampling::encode_threshold(incoming_th, 14));
+
+        // Product probability = 0.5 * 0.1 = 0.05
+        let t_o = rejection_threshold(0.05);
+
+        // High randomness above T_o → kept
+        let mut span_keep = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(t_o + 1))
+            .with_tracestate(&tracestate);
+        let result = engine
+            .evaluate_trace(&snapshot, &mut span_keep)
+            .await
+            .unwrap();
+        match &result {
+            EvaluateResult::Sample { keep, .. } => {
+                assert!(keep);
+                // Written th should encode T_o
+                let expected_th = super::sampling::encode_threshold(t_o, 4);
+                assert_eq!(span_keep.th_value.as_ref().unwrap(), &expected_th);
+            }
+            _ => panic!("expected Sample, got {:?}", result),
+        }
+
+        // Low randomness below T_o → dropped
+        let mut span_drop = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(t_o.saturating_sub(1)))
+            .with_tracestate(&tracestate);
+        let result = engine
+            .evaluate_trace(&snapshot, &mut span_drop)
+            .await
+            .unwrap();
+        match &result {
+            EvaluateResult::Sample { keep, .. } => assert!(!keep),
+            _ => panic!("expected Sample, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn proportional_mode_reduces_by_configured_factor() {
+        // Per OTel spec: T_o = ProbabilityToThreshold(p * ThresholdToProbability(T_s))
+        // With p=0.1 (10%) and incoming at 50%: product = 0.1 * 0.5 = 0.05
+        // So ~5% of spans should be kept.
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "proportional-reduce",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(10.0, SamplingMode::Proportional)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Incoming: 50% sampling
+        let incoming_th = rejection_threshold(0.5);
+        let tracestate = format!("ot=th:{}", super::sampling::encode_threshold(incoming_th, 14));
+
+        let mut kept = 0;
+        let total = 2000;
+        for i in 0..total {
+            let trace_id = distributed_trace_id(i);
+            let mut span = TestSpan::new()
+                .with_name("test")
+                .with_trace_id(&trace_id)
+                .with_tracestate(&tracestate);
+            let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+            if let EvaluateResult::Sample { keep: true, .. } = result {
+                kept += 1;
+            }
+        }
+        // 5% of 2000 = 100
+        assert!(
+            kept > 50 && kept < 150,
+            "Expected ~5% kept (10% * 50% incoming), got {}/{}",
+            kept,
+            total,
+        );
+    }
+
+    #[tokio::test]
+    async fn proportional_mode_100_percent_short_circuits() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "proportional-100",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(100.0, SamplingMode::Proportional)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        assert!(matches!(result, EvaluateResult::Keep { .. }));
+        assert_eq!(span.th_value, Some("0".to_string()));
+    }
+
+    #[tokio::test]
+    async fn proportional_mode_0_percent_short_circuits() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "proportional-0",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(0.0, SamplingMode::Proportional)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        assert!(matches!(result, EvaluateResult::Drop { .. }));
+    }
+
+    #[tokio::test]
+    async fn proportional_mode_incoming_th_zero_keeps_all_at_target() {
+        // Incoming th=0 means incoming probability is 100%.
+        // Proportional should then apply the target threshold directly.
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "proportional-incoming-100",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(50.0, SamplingMode::Proportional)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // th=0 means 100% incoming
+        let tracestate = "ot=th:0";
+        let threshold = rejection_threshold(0.5);
+
+        // High randomness → kept
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(threshold + 1))
+            .with_tracestate(tracestate);
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        match &result {
+            EvaluateResult::Sample { keep, .. } => assert!(keep),
+            _ => panic!("expected Sample, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn proportional_mode_fail_closed_no_randomness() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "proportional-fail-closed",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(50.0, SamplingMode::Proportional)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let mut span = TestSpan::new().with_name("test"); // no trace_id
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        assert!(matches!(result, EvaluateResult::Drop { .. }));
+    }
+
+    #[tokio::test]
+    async fn proportional_mode_fail_open_no_randomness() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let mut config = sampling_config_with_mode(50.0, SamplingMode::Proportional);
+        config.fail_closed = Some(false);
+
+        let policy = make_trace_policy(
+            "proportional-fail-open",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(config),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let mut span = TestSpan::new().with_name("test"); // no trace_id
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        assert!(matches!(result, EvaluateResult::Keep { .. }));
+    }
+
+    #[tokio::test]
+    async fn proportional_mode_writes_target_th_when_adjusting() {
+        // When proportional mode adjusts (incoming is less restrictive),
+        // the written th should be the target threshold.
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "proportional-th-write",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(10.0, SamplingMode::Proportional)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Incoming: th=0 (100% probability, less restrictive than 10%)
+        let target_th = rejection_threshold(0.1);
+
+        // Use high randomness to ensure span is kept
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(MAX_THRESHOLD - 1))
+            .with_tracestate("ot=th:0");
+
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        match &result {
+            EvaluateResult::Sample { keep: true, .. } => {
+                let written_th = span.th_value.as_ref().unwrap();
+                let expected_th = super::sampling::encode_threshold(target_th, 4);
+                assert_eq!(written_th, &expected_th);
+            }
+            _ => panic!("expected Sample(keep=true), got {:?}", result),
+        }
+    }
+
+    // ==================== Equalizing Mode Tests ====================
+
+    #[tokio::test]
+    async fn equalizing_mode_no_incoming_th_applies_target() {
+        // Without incoming th, equalizing should apply the target threshold directly.
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "equalizing-no-th",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(50.0, SamplingMode::Equalizing)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let threshold = rejection_threshold(0.5);
+
+        // High randomness → kept
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(threshold + 1));
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        match &result {
+            EvaluateResult::Sample { keep, .. } => assert!(keep),
+            _ => panic!("expected Sample, got {:?}", result),
+        }
+
+        // Low randomness → dropped
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(threshold - 1));
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        match &result {
+            EvaluateResult::Sample { keep, .. } => assert!(!keep),
+            _ => panic!("expected Sample, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn equalizing_mode_incoming_th_more_restrictive_keeps() {
+        // If incoming th >= target th (span already rare enough), keep it.
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        // Target: 50%
+        let policy = make_trace_policy(
+            "equalizing-keep-rare",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(50.0, SamplingMode::Equalizing)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Incoming: 10% (more restrictive)
+        let incoming_th = rejection_threshold(0.1);
+        let tracestate = format!("ot=th:{}", super::sampling::encode_threshold(incoming_th, 14));
+
+        // Even with low randomness that would normally fail the 50% threshold
+        let target_th = rejection_threshold(0.5);
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(target_th - 1))
+            .with_tracestate(&tracestate);
+
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        match &result {
+            EvaluateResult::Sample { keep, .. } => {
+                assert!(keep, "Equalizing should keep spans already sampled below target");
+            }
+            _ => panic!("expected Sample, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn equalizing_mode_incoming_th_less_restrictive_applies_target() {
+        // If incoming th < target th (span sampled at higher rate), apply target directly.
+        // This is different from proportional which adjusts.
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        // Target: 10%
+        let policy = make_trace_policy(
+            "equalizing-hard-cut",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(10.0, SamplingMode::Equalizing)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Incoming: 50% (less restrictive than 10%)
+        let incoming_th = rejection_threshold(0.5);
+        let tracestate = format!("ot=th:{}", super::sampling::encode_threshold(incoming_th, 14));
+
+        // Run many spans and verify ~10% are kept (equalizing applies target directly)
+        let mut kept = 0;
+        let total = 1000;
+        for i in 0..total {
+            let trace_id = distributed_trace_id(i);
+            let mut span = TestSpan::new()
+                .with_name("test")
+                .with_trace_id(&trace_id)
+                .with_tracestate(&tracestate);
+            let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+            if let EvaluateResult::Sample { keep: true, .. } = result {
+                kept += 1;
+            }
+        }
+        // 10% of 1000 = 100
+        assert!(
+            kept > 60 && kept < 140,
+            "Expected ~10% kept with equalizing, got {}/{}",
+            kept,
+            total,
+        );
+    }
+
+    #[tokio::test]
+    async fn equalizing_mode_100_percent_short_circuits() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "equalizing-100",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(100.0, SamplingMode::Equalizing)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        assert!(matches!(result, EvaluateResult::Keep { .. }));
+        assert_eq!(span.th_value, Some("0".to_string()));
+    }
+
+    #[tokio::test]
+    async fn equalizing_mode_0_percent_short_circuits() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "equalizing-0",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(0.0, SamplingMode::Equalizing)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        assert!(matches!(result, EvaluateResult::Drop { .. }));
+    }
+
+    #[tokio::test]
+    async fn equalizing_mode_fail_closed_no_randomness() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "equalizing-fail-closed",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(50.0, SamplingMode::Equalizing)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let mut span = TestSpan::new().with_name("test");
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        assert!(matches!(result, EvaluateResult::Drop { .. }));
+    }
+
+    #[tokio::test]
+    async fn equalizing_mode_preserves_incoming_th_when_keeping_rare() {
+        // When keeping a rare span, the written th should be the incoming th (not target).
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "equalizing-preserve-th",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(50.0, SamplingMode::Equalizing)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // Incoming: 10% → th is high (more restrictive)
+        let incoming_th = rejection_threshold(0.1);
+        let tracestate = format!("ot=th:{}", super::sampling::encode_threshold(incoming_th, 14));
+
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(1)) // any randomness, rare spans always kept
+            .with_tracestate(&tracestate);
+
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        match &result {
+            EvaluateResult::Sample { keep: true, .. } => {
+                // The written th should be the incoming th (preserving it)
+                let written_th = span.th_value.as_ref().unwrap();
+                let expected_th = super::sampling::encode_threshold(incoming_th, 4);
+                assert_eq!(written_th, &expected_th);
+            }
+            _ => panic!("expected Sample(keep=true), got {:?}", result),
+        }
+    }
+
+    // ==================== Cross-Mode Comparison Tests ====================
+
+    #[tokio::test]
+    async fn proportional_vs_equalizing_with_incoming_th() {
+        // Key difference per OTel spec:
+        // - Proportional multiplies incoming probability by p:
+        //   T_o = ProbabilityToThreshold(p * ThresholdToProbability(T_s))
+        // - Equalizing applies target threshold directly when incoming is
+        //   less restrictive.
+        //
+        // With p=0.1 and incoming=50%:
+        // - Proportional: 0.1 * 0.5 = 0.05 → ~5% kept
+        // - Equalizing: applies target 10% threshold directly → ~10% kept
+        let engine = PolicyEngine::new();
+
+        let incoming_th = rejection_threshold(0.5);
+        let tracestate = format!("ot=th:{}", super::sampling::encode_threshold(incoming_th, 14));
+
+        let mut proportional_kept = 0;
+        let mut equalizing_kept = 0;
+        let total = 2000;
+
+        for mode in [SamplingMode::Proportional, SamplingMode::Equalizing] {
+            let registry = PolicyRegistry::new();
+            let handle = registry.register_provider();
+            let policy = make_trace_policy(
+                "test",
+                vec![trace_name_regex_matcher(".+", false)],
+                Some(sampling_config_with_mode(10.0, mode)),
+                true,
+            );
+            handle.update(vec![policy]);
+            let snapshot = registry.snapshot();
+
+            let mut kept = 0;
+            for i in 0..total {
+                let trace_id = distributed_trace_id(i);
+                let mut span = TestSpan::new()
+                    .with_name("test")
+                    .with_trace_id(&trace_id)
+                    .with_tracestate(&tracestate);
+                let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+                if let EvaluateResult::Sample { keep: true, .. } = result {
+                    kept += 1;
+                }
+            }
+            match mode {
+                SamplingMode::Proportional => proportional_kept = kept,
+                SamplingMode::Equalizing => equalizing_kept = kept,
+                _ => {}
+            }
+        }
+
+        // Proportional: p * incoming = 0.1 * 0.5 = 5% → ~100 of 2000
+        assert!(
+            proportional_kept > 50 && proportional_kept < 150,
+            "Proportional expected ~5% (100), got {}/{}",
+            proportional_kept,
+            total,
+        );
+
+        // Equalizing: applies target directly → 10% → ~200 of 2000
+        assert!(
+            equalizing_kept > 120 && equalizing_kept < 280,
+            "Equalizing expected ~10% (200), got {}/{}",
+            equalizing_kept,
+            total,
+        );
+
+        // Equalizing should keep more than proportional (10% > 5%)
+        assert!(
+            equalizing_kept > proportional_kept,
+            "Equalizing ({}) should keep more than proportional ({})",
+            equalizing_kept,
+            proportional_kept,
+        );
+    }
+
+    #[tokio::test]
+    async fn all_modes_agree_on_no_incoming_th() {
+        // Without incoming th, all three modes should produce the same
+        // keep/drop decisions (all use target threshold against trace ID randomness).
+        let engine = PolicyEngine::new();
+        let trace_ids: Vec<String> = (0..100u64).map(distributed_trace_id).collect();
+
+        let mut results_by_mode: Vec<Vec<bool>> = Vec::new();
+
+        for mode in [SamplingMode::HashSeed, SamplingMode::Proportional, SamplingMode::Equalizing] {
+            let registry = PolicyRegistry::new();
+            let handle = registry.register_provider();
+            let mut config = sampling_config_with_mode(30.0, mode);
+            config.hash_seed = Some(0); // Ensure hash_seed=0 for fair comparison
+            let policy = make_trace_policy(
+                "test",
+                vec![trace_name_regex_matcher(".+", false)],
+                Some(config),
+                true,
+            );
+            handle.update(vec![policy]);
+            let snapshot = registry.snapshot();
+
+            let mut results = Vec::new();
+            for tid in &trace_ids {
+                let mut span = TestSpan::new().with_name("test").with_trace_id(tid);
+                let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+                let kept = matches!(
+                    result,
+                    EvaluateResult::Sample { keep: true, .. } | EvaluateResult::Keep { .. }
+                );
+                results.push(kept);
+            }
+            results_by_mode.push(results);
+        }
+
+        // All modes should agree
+        assert_eq!(results_by_mode[0], results_by_mode[1], "HashSeed and Proportional should agree without incoming th");
+        assert_eq!(results_by_mode[0], results_by_mode[2], "HashSeed and Equalizing should agree without incoming th");
+    }
+
+    #[tokio::test]
+    async fn all_modes_agree_on_100_and_0_percent() {
+        // All modes should short-circuit on 100% and 0%.
+        for mode in [SamplingMode::HashSeed, SamplingMode::Proportional, SamplingMode::Equalizing] {
+            let engine = PolicyEngine::new();
+
+            // 100%
+            let registry = PolicyRegistry::new();
+            let handle = registry.register_provider();
+            let policy = make_trace_policy(
+                "keep-all",
+                vec![trace_name_regex_matcher(".+", false)],
+                Some(sampling_config_with_mode(100.0, mode)),
+                true,
+            );
+            handle.update(vec![policy]);
+            let snapshot = registry.snapshot();
+
+            let mut span = TestSpan::new()
+                .with_name("test")
+                .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+            let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+            assert!(
+                matches!(result, EvaluateResult::Keep { .. }),
+                "Mode {:?} should keep at 100%",
+                mode,
+            );
+
+            // 0%
+            let registry = PolicyRegistry::new();
+            let handle = registry.register_provider();
+            let policy = make_trace_policy(
+                "drop-all",
+                vec![trace_name_regex_matcher(".+", false)],
+                Some(sampling_config_with_mode(0.0, mode)),
+                true,
+            );
+            handle.update(vec![policy]);
+            let snapshot = registry.snapshot();
+
+            let mut span = TestSpan::new()
+                .with_name("test")
+                .with_trace_id("0af7651916cd43dd8448eb211c80319c");
+            let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+            assert!(
+                matches!(result, EvaluateResult::Drop { .. }),
+                "Mode {:?} should drop at 0%",
+                mode,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unspecified_mode_defaults_to_hash_seed() {
+        // SamplingMode::Unspecified should behave like HashSeed.
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let policy = make_trace_policy(
+            "unspecified-mode",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config_with_mode(50.0, SamplingMode::Unspecified)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let threshold = rejection_threshold(0.5);
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(threshold + 1));
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        match &result {
+            EvaluateResult::Sample { keep, .. } => assert!(keep),
+            _ => panic!("expected Sample, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn mode_none_defaults_to_hash_seed() {
+        // When mode is None (not set), should behave like HashSeed.
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        // Use sampling_config() which sets mode: None
+        let policy = make_trace_policy(
+            "no-mode",
+            vec![trace_name_regex_matcher(".+", false)],
+            Some(sampling_config(50.0)),
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let threshold = rejection_threshold(0.5);
+        let mut span = TestSpan::new()
+            .with_name("test")
+            .with_trace_id(&trace_id_with_randomness(threshold + 1));
+        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        match &result {
+            EvaluateResult::Sample { keep, .. } => assert!(keep),
+            _ => panic!("expected Sample, got {:?}", result),
+        }
     }
 }
