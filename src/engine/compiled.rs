@@ -10,8 +10,8 @@ use crate::error::PolicyError;
 use crate::field::{LogFieldSelector, MetricFieldSelector, TraceFieldSelector};
 use crate::proto::tero::policy::v1::{
     AggregationTemporality, LogField, LogMatcher, LogSampleKey, MetricField, MetricMatcher,
-    MetricType, SpanKind, SpanStatusCode, TraceField, TraceMatcher, TraceSamplingConfig,
-    log_matcher, log_sample_key, metric_matcher, trace_matcher,
+    MetricType, SamplingMode, SpanKind, SpanStatusCode, TraceField, TraceMatcher,
+    TraceSamplingConfig, log_matcher, log_sample_key, metric_matcher, trace_matcher,
 };
 use crate::registry::PolicyStats;
 
@@ -25,6 +25,17 @@ use super::transform::CompiledTransform;
 pub struct PolicyMatchRef {
     /// Index into CompiledMatchers::policies.
     pub policy_index: usize,
+}
+
+/// The compiled sampling mode for trace evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompiledSamplingMode {
+    /// Hash trace ID with seed for deterministic sampling.
+    HashSeed,
+    /// Adjust threshold relative to incoming probability (tracestate `th`).
+    Proportional,
+    /// Equalize sampling across sources with different incoming probabilities.
+    Equalizing,
 }
 
 /// Compiled trace sampling configuration.
@@ -41,6 +52,10 @@ pub struct CompiledTraceSampling {
     pub precision: u32,
     /// If true, reject spans when randomness extraction fails.
     pub fail_closed: bool,
+    /// Sampling mode.
+    pub mode: CompiledSamplingMode,
+    /// Hash seed for HASH_SEED mode (combined with trace ID for deterministic sampling).
+    pub hash_seed: u32,
 }
 
 /// A compiled policy ready for evaluation.
@@ -885,15 +900,25 @@ fn compile_trace_sampling(config: Option<&TraceSamplingConfig>) -> CompiledTrace
             probability: 1.0,
             precision: 4,
             fail_closed: true,
+            mode: CompiledSamplingMode::HashSeed,
+            hash_seed: 0,
         },
         Some(c) => {
             let probability = (c.percentage as f64 / 100.0).clamp(0.0, 1.0);
             let precision = c.sampling_precision.unwrap_or(4).clamp(1, 14);
+            let mode = match c.mode.and_then(|m| SamplingMode::try_from(m).ok()) {
+                Some(SamplingMode::Proportional) => CompiledSamplingMode::Proportional,
+                Some(SamplingMode::Equalizing) => CompiledSamplingMode::Equalizing,
+                // HashSeed, Unspecified, or None all default to HashSeed
+                _ => CompiledSamplingMode::HashSeed,
+            };
             CompiledTraceSampling {
                 threshold: super::rejection_threshold(probability),
                 probability,
                 precision,
                 fail_closed: c.fail_closed.unwrap_or(true),
+                mode,
+                hash_seed: c.hash_seed.unwrap_or(0),
             }
         }
     }
