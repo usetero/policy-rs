@@ -472,10 +472,7 @@ mod tests {
 
     #[test]
     fn parse_tracestate_th_basic() {
-        assert_eq!(
-            parse_tracestate_th("ot=th:8"),
-            Some(0x80000000000000)
-        );
+        assert_eq!(parse_tracestate_th("ot=th:8"), Some(0x80000000000000));
     }
 
     #[test]
@@ -504,10 +501,7 @@ mod tests {
 
     #[test]
     fn parse_tracestate_th_zero() {
-        assert_eq!(
-            parse_tracestate_th("ot=th:0"),
-            Some(0)
-        );
+        assert_eq!(parse_tracestate_th("ot=th:0"), Some(0));
     }
 
     #[test]
@@ -566,7 +560,10 @@ mod tests {
         let trace_id = "0af7651916cd43dd8448eb211c80319c";
         let seeded = hash_seed_randomness(trace_id, 42).unwrap();
         let direct = parse_trace_id_randomness(trace_id).unwrap();
-        assert_ne!(seeded, direct, "Non-zero seed should produce different randomness");
+        assert_ne!(
+            seeded, direct,
+            "Non-zero seed should produce different randomness"
+        );
     }
 
     #[test]
@@ -574,7 +571,10 @@ mod tests {
         let trace_id = "0af7651916cd43dd8448eb211c80319c";
         let r1 = hash_seed_randomness(trace_id, 42);
         let r2 = hash_seed_randomness(trace_id, 42);
-        assert_eq!(r1, r2, "Same trace_id + seed should always produce same result");
+        assert_eq!(
+            r1, r2,
+            "Same trace_id + seed should always produce same result"
+        );
     }
 
     #[test]
@@ -582,14 +582,22 @@ mod tests {
         let trace_id = "0af7651916cd43dd8448eb211c80319c";
         let r1 = hash_seed_randomness(trace_id, 1).unwrap();
         let r2 = hash_seed_randomness(trace_id, 2).unwrap();
-        assert_ne!(r1, r2, "Different seeds should produce different randomness");
+        assert_ne!(
+            r1, r2,
+            "Different seeds should produce different randomness"
+        );
     }
 
     #[test]
     fn hash_seed_produces_56_bit_values() {
         for seed in [1, 42, 100, 1000, u32::MAX] {
             let r = hash_seed_randomness("0af7651916cd43dd8448eb211c80319c", seed).unwrap();
-            assert!(r < MAX_THRESHOLD, "Hash seed {} produced out-of-range value {}", seed, r);
+            assert!(
+                r < MAX_THRESHOLD,
+                "Hash seed {} produced out-of-range value {}",
+                seed,
+                r
+            );
         }
     }
 
@@ -610,7 +618,9 @@ mod tests {
             .count();
         assert!(
             above > 350 && above < 650,
-            "Expected ~50% above midpoint, got {}/{}", above, total
+            "Expected ~50% above midpoint, got {}/{}",
+            above,
+            total
         );
     }
 
@@ -620,13 +630,12 @@ mod tests {
         let threshold = rejection_threshold(0.5);
         let kept = (0..1000u64)
             .map(|i| format!("{:032x}", i))
-            .filter(|tid| {
-                hash_seed_randomness(tid, 42).unwrap() >= threshold
-            })
+            .filter(|tid| hash_seed_randomness(tid, 42).unwrap() >= threshold)
             .count();
         assert!(
             kept > 400 && kept < 600,
-            "Expected ~50% kept with seed 42, got {}/1000", kept
+            "Expected ~50% kept with seed 42, got {}/1000",
+            kept
         );
     }
 

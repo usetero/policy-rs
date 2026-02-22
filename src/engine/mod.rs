@@ -343,25 +343,23 @@ impl PolicyEngine {
         // apparently inconsistent."
         if let Some(tracestate) =
             span.get_field(&TraceFieldSelector::Simple(TraceField::TraceState))
+            && let (Some(rv), Some(th)) = (
+                parse_tracestate_rv(&tracestate),
+                parse_tracestate_th(&tracestate),
+            )
+            && rv < th
         {
-            if let (Some(rv), Some(th)) =
-                (parse_tracestate_rv(&tracestate), parse_tracestate_th(&tracestate))
-            {
-                if rv < th {
-                    record_match_stats(compiled, &matching, true);
-                    return Ok(EvaluateResult::Keep {
-                        policy_id: winner.id.clone(),
-                        transformed: false,
-                    });
-                }
-            }
+            record_match_stats(compiled, &matching, true);
+            return Ok(EvaluateResult::Keep {
+                policy_id: winner.id.clone(),
+                transformed: false,
+            });
         }
 
         // Mode-specific sampling decision
         match trace_sampling.mode {
             CompiledSamplingMode::HashSeed => {
-                let randomness =
-                    extract_hash_seed_randomness(span, trace_sampling.hash_seed);
+                let randomness = extract_hash_seed_randomness(span, trace_sampling.hash_seed);
 
                 match randomness {
                     Some(r) => {
@@ -403,11 +401,8 @@ impl PolicyEngine {
                 match randomness {
                     Some(r) => {
                         // Compute the product threshold T_o
-                        let inc_prob = incoming_th
-                            .map(threshold_to_probability)
-                            .unwrap_or(1.0);
-                        let product_prob =
-                            (trace_sampling.probability * inc_prob).clamp(0.0, 1.0);
+                        let inc_prob = incoming_th.map(threshold_to_probability).unwrap_or(1.0);
+                        let product_prob = (trace_sampling.probability * inc_prob).clamp(0.0, 1.0);
                         let t_o = rejection_threshold(product_prob);
 
                         let keep = r >= t_o;
@@ -3419,9 +3414,9 @@ mod tests {
 
     // ==================== Trace Tests ====================
 
+    use crate::engine::sampling::MAX_THRESHOLD;
     use crate::engine::signal::TraceSignal;
     use crate::field::TraceFieldSelector;
-    use crate::engine::sampling::MAX_THRESHOLD;
     use crate::proto::tero::policy::v1::{
         SamplingMode, SpanKind, SpanStatusCode, TraceField, TraceMatcher, TraceSamplingConfig,
         TraceTarget, trace_matcher,
@@ -4589,9 +4584,7 @@ mod tests {
         let total = 500;
         for i in 0..total {
             let trace_id = distributed_trace_id(i);
-            let mut span = TestSpan::new()
-                .with_name("test")
-                .with_trace_id(&trace_id);
+            let mut span = TestSpan::new().with_name("test").with_trace_id(&trace_id);
             let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
             if let EvaluateResult::Sample { keep: true, .. } = result {
                 kept += 1;
@@ -4674,9 +4667,7 @@ mod tests {
 
         let mut first_result = None;
         for _ in 0..10 {
-            let mut span = TestSpan::new()
-                .with_name("test")
-                .with_trace_id(trace_id);
+            let mut span = TestSpan::new().with_name("test").with_trace_id(trace_id);
             let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
             let kept = matches!(result, EvaluateResult::Sample { keep: true, .. });
             if let Some(first) = first_result {
@@ -4762,7 +4753,10 @@ mod tests {
         let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => {
-                assert!(keep, "Seed 0 should use tracestate rv (high) over trace_id (low)");
+                assert!(
+                    keep,
+                    "Seed 0 should use tracestate rv (high) over trace_id (low)"
+                );
             }
             _ => panic!("expected Sample, got {:?}", result),
         }
@@ -4896,7 +4890,10 @@ mod tests {
 
         // Incoming: 10% sampling
         let incoming_th = rejection_threshold(0.1);
-        let tracestate = format!("ot=th:{}", super::sampling::encode_threshold(incoming_th, 14));
+        let tracestate = format!(
+            "ot=th:{}",
+            super::sampling::encode_threshold(incoming_th, 14)
+        );
 
         // Product probability = 0.5 * 0.1 = 0.05
         let t_o = rejection_threshold(0.05);
@@ -4956,7 +4953,10 @@ mod tests {
 
         // Incoming: 50% sampling
         let incoming_th = rejection_threshold(0.5);
-        let tracestate = format!("ot=th:{}", super::sampling::encode_threshold(incoming_th, 14));
+        let tracestate = format!(
+            "ot=th:{}",
+            super::sampling::encode_threshold(incoming_th, 14)
+        );
 
         let mut kept = 0;
         let total = 2000;
@@ -5206,7 +5206,10 @@ mod tests {
 
         // Incoming: 10% (more restrictive)
         let incoming_th = rejection_threshold(0.1);
-        let tracestate = format!("ot=th:{}", super::sampling::encode_threshold(incoming_th, 14));
+        let tracestate = format!(
+            "ot=th:{}",
+            super::sampling::encode_threshold(incoming_th, 14)
+        );
 
         // Even with low randomness that would normally fail the 50% threshold
         let target_th = rejection_threshold(0.5);
@@ -5218,7 +5221,10 @@ mod tests {
         let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => {
-                assert!(keep, "Equalizing should keep spans already sampled below target");
+                assert!(
+                    keep,
+                    "Equalizing should keep spans already sampled below target"
+                );
             }
             _ => panic!("expected Sample, got {:?}", result),
         }
@@ -5245,7 +5251,10 @@ mod tests {
 
         // Incoming: 50% (less restrictive than 10%)
         let incoming_th = rejection_threshold(0.5);
-        let tracestate = format!("ot=th:{}", super::sampling::encode_threshold(incoming_th, 14));
+        let tracestate = format!(
+            "ot=th:{}",
+            super::sampling::encode_threshold(incoming_th, 14)
+        );
 
         // Run many spans and verify ~10% are kept (equalizing applies target directly)
         let mut kept = 0;
@@ -5357,7 +5366,10 @@ mod tests {
 
         // Incoming: 10% → th is high (more restrictive)
         let incoming_th = rejection_threshold(0.1);
-        let tracestate = format!("ot=th:{}", super::sampling::encode_threshold(incoming_th, 14));
+        let tracestate = format!(
+            "ot=th:{}",
+            super::sampling::encode_threshold(incoming_th, 14)
+        );
 
         let mut span = TestSpan::new()
             .with_name("test")
@@ -5392,7 +5404,10 @@ mod tests {
         let engine = PolicyEngine::new();
 
         let incoming_th = rejection_threshold(0.5);
-        let tracestate = format!("ot=th:{}", super::sampling::encode_threshold(incoming_th, 14));
+        let tracestate = format!(
+            "ot=th:{}",
+            super::sampling::encode_threshold(incoming_th, 14)
+        );
 
         let mut proportional_kept = 0;
         let mut equalizing_kept = 0;
@@ -5463,7 +5478,11 @@ mod tests {
 
         let mut results_by_mode: Vec<Vec<bool>> = Vec::new();
 
-        for mode in [SamplingMode::HashSeed, SamplingMode::Proportional, SamplingMode::Equalizing] {
+        for mode in [
+            SamplingMode::HashSeed,
+            SamplingMode::Proportional,
+            SamplingMode::Equalizing,
+        ] {
             let registry = PolicyRegistry::new();
             let handle = registry.register_provider();
             let mut config = sampling_config_with_mode(30.0, mode);
@@ -5491,14 +5510,24 @@ mod tests {
         }
 
         // All modes should agree
-        assert_eq!(results_by_mode[0], results_by_mode[1], "HashSeed and Proportional should agree without incoming th");
-        assert_eq!(results_by_mode[0], results_by_mode[2], "HashSeed and Equalizing should agree without incoming th");
+        assert_eq!(
+            results_by_mode[0], results_by_mode[1],
+            "HashSeed and Proportional should agree without incoming th"
+        );
+        assert_eq!(
+            results_by_mode[0], results_by_mode[2],
+            "HashSeed and Equalizing should agree without incoming th"
+        );
     }
 
     #[tokio::test]
     async fn all_modes_agree_on_100_and_0_percent() {
         // All modes should short-circuit on 100% and 0%.
-        for mode in [SamplingMode::HashSeed, SamplingMode::Proportional, SamplingMode::Equalizing] {
+        for mode in [
+            SamplingMode::HashSeed,
+            SamplingMode::Proportional,
+            SamplingMode::Equalizing,
+        ] {
             let engine = PolicyEngine::new();
 
             // 100%
