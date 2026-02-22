@@ -26,11 +26,13 @@ use std::time::Duration;
 
 use crate::error::PolicyError;
 use crate::field::TraceFieldSelector;
+use crate::proto::tero::policy::v1::TraceField;
 use crate::registry::PolicySnapshot;
 
 use self::sampling::{
     encode_threshold, extract_hash_seed_randomness, extract_incoming_threshold,
-    extract_trace_randomness, rejection_threshold, should_sample_log, threshold_to_probability,
+    extract_trace_randomness, parse_tracestate_rv, parse_tracestate_th, rejection_threshold,
+    should_sample_log, threshold_to_probability,
 };
 
 /// Result of evaluating a log record against policies.
@@ -332,6 +334,27 @@ impl PolicyEngine {
                 });
             }
             _ => {}
+        }
+
+        // Consistency check: if both rv and th are present in tracestate,
+        // verify rv >= th. If inconsistent, keep the span but erase threshold.
+        // Per OTel spec: "Sampling stages should check for consistency when it
+        // is a simple test, and they should erase the threshold when it is
+        // apparently inconsistent."
+        if let Some(tracestate) =
+            span.get_field(&TraceFieldSelector::Simple(TraceField::TraceState))
+        {
+            if let (Some(rv), Some(th)) =
+                (parse_tracestate_rv(&tracestate), parse_tracestate_th(&tracestate))
+            {
+                if rv < th {
+                    record_match_stats(compiled, &matching, true);
+                    return Ok(EvaluateResult::Keep {
+                        policy_id: winner.id.clone(),
+                        transformed: false,
+                    });
+                }
+            }
         }
 
         // Mode-specific sampling decision
