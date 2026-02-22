@@ -103,11 +103,11 @@ impl PolicyEngine {
             return Ok(EvaluateResult::NoMatch);
         };
 
-        let Some(matching) = find_matching_policies(compiled, log)? else {
+        let Some((winner_idx, matching)) = find_matching_policies(compiled, log)? else {
             return Ok(EvaluateResult::NoMatch);
         };
 
-        let winner = &compiled.policies[matching[0]];
+        let winner = &compiled.policies[winner_idx];
 
         // Extract sample key value if configured
         let sample_key_value = winner
@@ -122,7 +122,7 @@ impl PolicyEngine {
                 | EvaluateResult::Sample { keep: true, .. }
                 | EvaluateResult::RateLimit { allowed: true, .. }
         );
-        record_match_stats(compiled, &matching, will_keep);
+        record_match_stats(compiled, winner_idx, &matching, will_keep);
         Ok(result)
     }
 
@@ -147,11 +147,11 @@ impl PolicyEngine {
             return Ok(EvaluateResult::NoMatch);
         };
 
-        let Some(matching) = find_matching_policies(compiled, log)? else {
+        let Some((winner_idx, matching)) = find_matching_policies(compiled, log)? else {
             return Ok(EvaluateResult::NoMatch);
         };
 
-        let winner = &compiled.policies[matching[0]];
+        let winner = &compiled.policies[winner_idx];
 
         // Extract sample key value if configured (for consistent sampling)
         let sample_key_value = winner
@@ -175,7 +175,7 @@ impl PolicyEngine {
         };
 
         // Record match hit/miss stats based on outcome
-        record_match_stats(compiled, &matching, will_keep);
+        record_match_stats(compiled, winner_idx, &matching, will_keep);
 
         // Only apply transforms if the log is being kept
         let transformed = if will_keep {
@@ -293,18 +293,18 @@ impl PolicyEngine {
             return Ok(EvaluateResult::NoMatch);
         };
 
-        let Some(matching) = find_matching_policies(compiled, span)? else {
+        let Some((winner_idx, matching)) = find_matching_policies(compiled, span)? else {
             return Ok(EvaluateResult::NoMatch);
         };
 
-        let winner = &compiled.policies[matching[0]];
+        let winner = &compiled.policies[winner_idx];
 
         // For trace policies, use consistent probability sampling with tracestate
         let trace_sampling = match &winner.trace_sampling {
             Some(ts) => ts,
             None => {
                 // No sampling config — treat as keep all
-                record_match_stats(compiled, &matching, true);
+                record_match_stats(compiled, winner_idx, &matching, true);
                 return Ok(EvaluateResult::Keep {
                     policy_id: winner.id.clone(),
                     transformed: false,
@@ -315,7 +315,7 @@ impl PolicyEngine {
         // Short-circuit for 100% and 0%
         match &winner.keep {
             CompiledKeep::None => {
-                record_match_stats(compiled, &matching, false);
+                record_match_stats(compiled, winner_idx, &matching, false);
                 return Ok(EvaluateResult::Drop {
                     policy_id: winner.id.clone(),
                 });
@@ -327,7 +327,7 @@ impl PolicyEngine {
                     &encode_threshold(0, trace_sampling.precision),
                     true,
                 );
-                record_match_stats(compiled, &matching, true);
+                record_match_stats(compiled, winner_idx, &matching, true);
                 return Ok(EvaluateResult::Keep {
                     policy_id: winner.id.clone(),
                     transformed: true,
@@ -349,7 +349,7 @@ impl PolicyEngine {
             )
             && rv < th
         {
-            record_match_stats(compiled, &matching, true);
+            record_match_stats(compiled, winner_idx, &matching, true);
             return Ok(EvaluateResult::Keep {
                 policy_id: winner.id.clone(),
                 transformed: false,
@@ -374,7 +374,7 @@ impl PolicyEngine {
                                 true,
                             );
                         }
-                        record_match_stats(compiled, &matching, keep);
+                        record_match_stats(compiled, winner_idx, &matching, keep);
                         Ok(EvaluateResult::Sample {
                             policy_id: winner.id.clone(),
                             percentage: trace_sampling.probability * 100.0,
@@ -382,7 +382,9 @@ impl PolicyEngine {
                             transformed: keep,
                         })
                     }
-                    None => fail_or_open(trace_sampling, compiled, &matching, &winner.id),
+                    None => {
+                        fail_or_open(trace_sampling, compiled, winner_idx, &matching, &winner.id)
+                    }
                 }
             }
             CompiledSamplingMode::Proportional => {
@@ -413,7 +415,7 @@ impl PolicyEngine {
                                 true,
                             );
                         }
-                        record_match_stats(compiled, &matching, keep);
+                        record_match_stats(compiled, winner_idx, &matching, keep);
                         Ok(EvaluateResult::Sample {
                             policy_id: winner.id.clone(),
                             percentage: trace_sampling.probability * 100.0,
@@ -421,7 +423,9 @@ impl PolicyEngine {
                             transformed: keep,
                         })
                     }
-                    None => fail_or_open(trace_sampling, compiled, &matching, &winner.id),
+                    None => {
+                        fail_or_open(trace_sampling, compiled, winner_idx, &matching, &winner.id)
+                    }
                 }
             }
             CompiledSamplingMode::Equalizing => {
@@ -455,7 +459,7 @@ impl PolicyEngine {
                                 true,
                             );
                         }
-                        record_match_stats(compiled, &matching, keep);
+                        record_match_stats(compiled, winner_idx, &matching, keep);
                         Ok(EvaluateResult::Sample {
                             policy_id: winner.id.clone(),
                             percentage: trace_sampling.probability * 100.0,
@@ -463,7 +467,9 @@ impl PolicyEngine {
                             transformed: keep,
                         })
                     }
-                    None => fail_or_open(trace_sampling, compiled, &matching, &winner.id),
+                    None => {
+                        fail_or_open(trace_sampling, compiled, winner_idx, &matching, &winner.id)
+                    }
                 }
             }
         }
@@ -476,11 +482,12 @@ impl PolicyEngine {
 fn fail_or_open(
     trace_sampling: &CompiledTraceSampling,
     compiled: &CompiledMatchers<TraceSignal>,
+    winner: usize,
     matching: &[usize],
     policy_id: &str,
 ) -> Result<EvaluateResult, PolicyError> {
     let will_keep = !trace_sampling.fail_closed;
-    record_match_stats(compiled, matching, will_keep);
+    record_match_stats(compiled, winner, matching, will_keep);
     if trace_sampling.fail_closed {
         Ok(EvaluateResult::Drop {
             policy_id: policy_id.to_string(),
@@ -501,14 +508,16 @@ impl Default for PolicyEngine {
 
 /// Find matching policies by scanning Vectorscan databases and checking existence.
 ///
-/// Returns the matching policy indices sorted by restrictiveness (most restrictive first),
-/// or `None` if no policies match. Does NOT record match stats — callers must call
-/// `record_match_stats` after determining the keep outcome.
-/// NOTE: Later we will need to iterate over all the policies for transforms on keep decisions.
+/// Returns `(winner_index, all_matching_indices)` where `winner_index` is the most
+/// restrictive policy, and `all_matching_indices` are in compiled order (alphanumeric by
+/// policy ID). Returns `None` if no policies match.
+///
+/// Does NOT record match stats — callers must call `record_match_stats` after determining
+/// the keep outcome.
 fn find_matching_policies<S: Signal>(
     compiled: &CompiledMatchers<S>,
     record: &impl Matchable<Signal = S>,
-) -> Result<Option<Vec<usize>>, PolicyError> {
+) -> Result<Option<(usize, Vec<usize>)>, PolicyError> {
     let policy_count = compiled.policies.len();
     if policy_count == 0 {
         return Ok(None);
@@ -573,26 +582,25 @@ fn find_matching_policies<S: Signal>(
         return Ok(None);
     }
 
-    // Sort by restrictiveness (most restrictive first)
-    matching.sort_by(|a, b| {
-        compiled.policies[*b]
-            .keep
-            .restrictiveness()
-            .cmp(&compiled.policies[*a].keep.restrictiveness())
-    });
+    // Find the most restrictive policy (the "winner" for keep/drop decisions)
+    let winner = *matching
+        .iter()
+        .max_by_key(|&&idx| compiled.policies[idx].keep.restrictiveness())
+        .unwrap(); // safe: matching is non-empty
 
-    Ok(Some(matching))
+    Ok(Some((winner, matching)))
 }
 
 /// Record match hit/miss stats based on the final keep outcome.
 ///
 /// Per spec:
 /// - If kept: all matching policies record a hit.
-/// - If dropped: the winner (matching[0], most restrictive) records a hit;
+/// - If dropped: the winner (most restrictive) records a hit;
 ///   all other matching policies record a miss.
 /// - Non-matching policies: no counter change.
 fn record_match_stats<S: Signal>(
     compiled: &CompiledMatchers<S>,
+    winner: usize,
     matching: &[usize],
     will_keep: bool,
 ) {
@@ -601,9 +609,11 @@ fn record_match_stats<S: Signal>(
             compiled.policies[idx].stats.record_hit();
         }
     } else {
-        compiled.policies[matching[0]].stats.record_hit();
-        for &idx in &matching[1..] {
-            compiled.policies[idx].stats.record_miss();
+        compiled.policies[winner].stats.record_hit();
+        for &idx in matching {
+            if idx != winner {
+                compiled.policies[idx].stats.record_miss();
+            }
         }
     }
 }
@@ -5631,5 +5641,69 @@ mod tests {
             EvaluateResult::Sample { keep, .. } => assert!(keep),
             _ => panic!("expected Sample, got {:?}", result),
         }
+    }
+
+    #[tokio::test]
+    async fn transforms_applied_in_alphanumeric_order_by_policy_id() {
+        // ENG-224: When multiple policies match and both upsert the same field,
+        // the alphabetically-last policy should win because transforms are
+        // applied in alphanumeric order by policy ID.
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        // zzz-add-second is listed FIRST in the array, sets tag=second
+        let policy_zzz = make_policy_with_transform(
+            "zzz-add-second",
+            vec![body_regex_matcher(".+", false)],
+            "all",
+            true,
+            Some(LogTransform {
+                add: vec![LogAdd {
+                    field: Some(log_add::Field::LogAttribute(attr_path("tag"))),
+                    value: "second".to_string(),
+                    upsert: true,
+                }],
+                ..Default::default()
+            }),
+        );
+
+        // aaa-add-first is listed SECOND in the array, sets tag=first
+        let policy_aaa = make_policy_with_transform(
+            "aaa-add-first",
+            vec![body_regex_matcher(".+", false)],
+            "all",
+            true,
+            Some(LogTransform {
+                add: vec![LogAdd {
+                    field: Some(log_add::Field::LogAttribute(attr_path("tag"))),
+                    value: "first".to_string(),
+                    upsert: true,
+                }],
+                ..Default::default()
+            }),
+        );
+
+        // Register zzz first, aaa second — array order would give tag=first (wrong)
+        handle.update(vec![policy_zzz, policy_aaa]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let mut log = TestLog::new().with_body("hello");
+
+        let result = engine
+            .evaluate_and_transform(&snapshot, &mut log)
+            .await
+            .unwrap();
+        match result {
+            EvaluateResult::Keep { transformed, .. } => assert!(transformed),
+            _ => panic!("expected Keep result"),
+        }
+
+        // Alphanumeric order: aaa runs first (tag=first), then zzz runs second (tag=second)
+        assert_eq!(
+            log.log_attributes.get("tag"),
+            Some(&"second".to_string()),
+            "zzz-add-second should win because it runs last in alphanumeric order"
+        );
     }
 }

@@ -329,6 +329,11 @@ impl RegistryInner {
             }
         }
 
+        // Sort by policy ID for deterministic transform ordering (spec requirement)
+        log_policies.sort_by(|a, b| a.0.id().cmp(b.0.id()));
+        metric_policies.sort_by(|a, b| a.0.id().cmp(b.0.id()));
+        trace_policies.sort_by(|a, b| a.0.id().cmp(b.0.id()));
+
         // Compile log matchers
         let compiled_logs = if !log_policies.is_empty() {
             match CompiledMatchers::<LogSignal>::build(log_policies.into_iter()) {
