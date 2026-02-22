@@ -382,7 +382,9 @@ impl PolicyEngine {
                             transformed: keep,
                         })
                     }
-                    None => fail_or_open(trace_sampling, compiled, winner_idx, &matching, &winner.id),
+                    None => {
+                        fail_or_open(trace_sampling, compiled, winner_idx, &matching, &winner.id)
+                    }
                 }
             }
             CompiledSamplingMode::Proportional => {
@@ -421,7 +423,9 @@ impl PolicyEngine {
                             transformed: keep,
                         })
                     }
-                    None => fail_or_open(trace_sampling, compiled, winner_idx, &matching, &winner.id),
+                    None => {
+                        fail_or_open(trace_sampling, compiled, winner_idx, &matching, &winner.id)
+                    }
                 }
             }
             CompiledSamplingMode::Equalizing => {
@@ -463,7 +467,9 @@ impl PolicyEngine {
                             transformed: keep,
                         })
                     }
-                    None => fail_or_open(trace_sampling, compiled, winner_idx, &matching, &winner.id),
+                    None => {
+                        fail_or_open(trace_sampling, compiled, winner_idx, &matching, &winner.id)
+                    }
                 }
             }
         }
