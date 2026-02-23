@@ -5697,13 +5697,29 @@ mod tests {
 
         // drop-trace-logs (alpha first) gets the hit
         let trace_stats = snapshot.get("drop-trace-logs").unwrap();
-        assert_eq!(trace_stats.stats.hits(), 1, "drop-trace-logs should have 1 hit");
-        assert_eq!(trace_stats.stats.misses(), 0, "drop-trace-logs should have 0 misses");
+        assert_eq!(
+            trace_stats.stats.hits(),
+            1,
+            "drop-trace-logs should have 1 hit"
+        );
+        assert_eq!(
+            trace_stats.stats.misses(),
+            0,
+            "drop-trace-logs should have 0 misses"
+        );
 
         // drop-verbose (alpha second) gets a miss
         let verbose_stats = snapshot.get("drop-verbose").unwrap();
-        assert_eq!(verbose_stats.stats.hits(), 0, "drop-verbose should have 0 hits");
-        assert_eq!(verbose_stats.stats.misses(), 1, "drop-verbose should have 1 miss");
+        assert_eq!(
+            verbose_stats.stats.hits(),
+            0,
+            "drop-verbose should have 0 hits"
+        );
+        assert_eq!(
+            verbose_stats.stats.misses(),
+            1,
+            "drop-verbose should have 1 miss"
+        );
     }
 
     #[tokio::test]
