@@ -582,10 +582,18 @@ fn find_matching_policies<S: Signal>(
         return Ok(None);
     }
 
-    // Find the most restrictive policy (the "winner" for keep/drop decisions)
+    // Find the most restrictive policy (the "winner" for keep/drop decisions).
+    // On ties, the lowest index wins — since policies are compiled in alphanumeric
+    // order by ID, this matches Go/Zig behavior.
     let winner = *matching
         .iter()
-        .max_by_key(|&&idx| compiled.policies[idx].keep.restrictiveness())
+        .max_by(|&&a, &&b| {
+            compiled.policies[a]
+                .keep
+                .restrictiveness()
+                .cmp(&compiled.policies[b].keep.restrictiveness())
+                .then(b.cmp(&a))
+        })
         .unwrap(); // safe: matching is non-empty
 
     Ok(Some((winner, matching)))
@@ -5641,6 +5649,61 @@ mod tests {
             EvaluateResult::Sample { keep, .. } => assert!(keep),
             _ => panic!("expected Sample, got {:?}", result),
         }
+    }
+
+    #[tokio::test]
+    async fn drop_stats_attributed_to_alphanumeric_first_policy() {
+        // ENG-228: When multiple drop policies match, the hit should be
+        // attributed to the alphabetically-first policy, matching Go/Zig.
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        // Both policies match body "verbose trace data", both are drop.
+        // "drop-verbose" is listed FIRST in array order.
+        let drop_verbose = make_policy(
+            "drop-verbose",
+            vec![body_regex_matcher("verbose", false)],
+            "none",
+            true,
+        );
+        // "drop-trace-logs" is listed SECOND in array order.
+        let drop_trace = make_policy(
+            "drop-trace-logs",
+            vec![severity_exact_matcher("TRACE", false)],
+            "none",
+            true,
+        );
+
+        // Register in non-alphanumeric array order
+        handle.update(vec![drop_verbose, drop_trace]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let log = TestLog::new()
+            .with_body("verbose trace data")
+            .with_severity("TRACE");
+
+        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        match &result {
+            EvaluateResult::Drop { policy_id } => {
+                // Alphabetically first: "drop-trace-logs" < "drop-verbose"
+                assert_eq!(
+                    policy_id, "drop-trace-logs",
+                    "winner should be the alphabetically-first drop policy"
+                );
+            }
+            _ => panic!("expected Drop result, got {:?}", result),
+        }
+
+        // drop-trace-logs (alpha first) gets the hit
+        let trace_stats = snapshot.get("drop-trace-logs").unwrap();
+        assert_eq!(trace_stats.stats.hits(), 1, "drop-trace-logs should have 1 hit");
+        assert_eq!(trace_stats.stats.misses(), 0, "drop-trace-logs should have 0 misses");
+
+        // drop-verbose (alpha second) gets a miss
+        let verbose_stats = snapshot.get("drop-verbose").unwrap();
+        assert_eq!(verbose_stats.stats.hits(), 0, "drop-verbose should have 0 hits");
+        assert_eq!(verbose_stats.stats.misses(), 1, "drop-verbose should have 1 miss");
     }
 
     #[tokio::test]
