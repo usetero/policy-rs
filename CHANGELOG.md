@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.11](https://github.com/usetero/policy-rs/compare/v1.4.10...v1.4.11) (2026-02-23)
+
+
+### Bug Fixes
+
+* alphanumeric order ([#65](https://github.com/usetero/policy-rs/issues/65)) ([362ae63](https://github.com/usetero/policy-rs/commit/362ae6379d29f35e6a249de4edc267e5aba16103))
+* alphanumeric sort on snapshot compilation ([#64](https://github.com/usetero/policy-rs/issues/64)) ([e6dd0ba](https://github.com/usetero/policy-rs/commit/e6dd0ba118dea0ce71168c5c5117ddffacd07174))
+* implement all sampling logic ([#62](https://github.com/usetero/policy-rs/issues/62)) ([583f1a4](https://github.com/usetero/policy-rs/commit/583f1a45f543cbb96d1959dfabfd64c4384ba484))
+
 ## [1.4.10](https://github.com/usetero/policy-rs/compare/v1.4.9...v1.4.10) (2026-02-20)
 
 
