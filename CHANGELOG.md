@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.12](https://github.com/usetero/policy-rs/compare/v1.4.11...v1.4.12) (2026-02-23)
+
+
+### Bug Fixes
+
+* release process ([#66](https://github.com/usetero/policy-rs/issues/66)) ([b6632bd](https://github.com/usetero/policy-rs/commit/b6632bdb3c5e2c8025143fcc932f4978834a6102))
+
 ## [1.4.11](https://github.com/usetero/policy-rs/compare/v1.4.10...v1.4.11) (2026-02-23)
 
 
