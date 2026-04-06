@@ -75,37 +75,36 @@ impl CompiledKeep {
             let rate_str = s[..slash_pos].trim();
             let window_str = s[slash_pos + 1..].trim();
 
-            let rate: u64 =
-                rate_str
-                    .parse()
-                    .map_err(|_| PolicyError::InvalidKeepExpression {
-                        expression: s.to_string(),
-                        reason: "invalid rate value".to_string(),
-                    })?;
+            let rate: u64 = rate_str
+                .parse()
+                .map_err(|_| PolicyError::InvalidKeepExpression {
+                    expression: s.to_string(),
+                    reason: "invalid rate value".to_string(),
+                })?;
 
             let window_secs = if let Some(dur_str) = window_str.strip_suffix('s') {
                 let dur_str = dur_str.trim();
                 if dur_str.is_empty() {
                     1
                 } else {
-                    dur_str.parse::<u64>().map_err(|_| {
-                        PolicyError::InvalidKeepExpression {
+                    dur_str
+                        .parse::<u64>()
+                        .map_err(|_| PolicyError::InvalidKeepExpression {
                             expression: s.to_string(),
                             reason: "invalid duration value".to_string(),
-                        }
-                    })?
+                        })?
                 }
             } else if let Some(dur_str) = window_str.strip_suffix('m') {
                 let dur_str = dur_str.trim();
                 let multiplier: u64 = if dur_str.is_empty() {
                     1
                 } else {
-                    dur_str.parse().map_err(|_| {
-                        PolicyError::InvalidKeepExpression {
+                    dur_str
+                        .parse()
+                        .map_err(|_| PolicyError::InvalidKeepExpression {
                             expression: s.to_string(),
                             reason: "invalid duration value".to_string(),
-                        }
-                    })?
+                        })?
                 };
                 multiplier * 60
             } else {

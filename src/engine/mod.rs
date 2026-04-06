@@ -203,13 +203,11 @@ impl PolicyEngine {
                 keep: will_keep,
                 transformed,
             }),
-            CompiledKeep::RateLimit { .. } => {
-                Ok(EvaluateResult::RateLimit {
-                    policy_id: winner.id.clone(),
-                    allowed: will_keep,
-                    transformed,
-                })
-            }
+            CompiledKeep::RateLimit { .. } => Ok(EvaluateResult::RateLimit {
+                policy_id: winner.id.clone(),
+                allowed: will_keep,
+                transformed,
+            }),
         }
     }
 
@@ -246,9 +244,9 @@ impl PolicyEngine {
                 }
             }
             CompiledKeep::RateLimit { limit, window_secs } => {
-                let allowed = self
-                    .rate_limiters
-                    .check(policy_id, *limit, Duration::from_secs(*window_secs));
+                let allowed =
+                    self.rate_limiters
+                        .check(policy_id, *limit, Duration::from_secs(*window_secs));
                 EvaluateResult::RateLimit {
                     policy_id: policy_id.to_string(),
                     allowed,
