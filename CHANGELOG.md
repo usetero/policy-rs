@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/usetero/policy-rs/compare/v1.4.12...v1.5.0) (2026-04-06)
+
+
+### Features
+
+* add support for arbitrary rate limit windows ([#77](https://github.com/usetero/policy-rs/issues/77)) ([d889408](https://github.com/usetero/policy-rs/commit/d8894089af92bd3446ab5969f16e71eaf63c10e2))
+
 ## [1.4.12](https://github.com/usetero/policy-rs/compare/v1.4.11...v1.4.12) (2026-02-23)
 
 
