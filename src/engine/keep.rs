@@ -15,10 +15,8 @@ pub enum CompiledKeep {
     None,
     /// Keep a percentage of matching telemetry (0.0 to 1.0).
     Percentage(f64),
-    /// Rate limit to N per second.
-    RatePerSecond(u64),
-    /// Rate limit to N per minute.
-    RatePerMinute(u64),
+    /// Rate limit to N per window. `window_secs` is the window duration in seconds.
+    RateLimit { limit: u64, window_secs: u64 },
 }
 
 impl CompiledKeep {
@@ -30,6 +28,8 @@ impl CompiledKeep {
     /// - `"N%"` - Keep N percent (0-100)
     /// - `"N/s"` - Keep at most N per second
     /// - `"N/m"` - Keep at most N per minute
+    /// - `"N/Ds"` - Keep at most N per D-second window
+    /// - `"N/Dm"` - Keep at most N per D-minute window
     pub fn parse(s: &str) -> Result<Self, PolicyError> {
         let s = s.trim();
 
@@ -70,32 +70,62 @@ impl CompiledKeep {
             return Ok(CompiledKeep::Percentage(pct / 100.0));
         }
 
-        // Check for rate per second: "N/s"
-        if let Some(rate_str) = s.strip_suffix("/s") {
+        // Check for rate limit: "N/s", "N/m", "N/Ds", "N/Dm"
+        if let Some(slash_pos) = s.find('/') {
+            let rate_str = s[..slash_pos].trim();
+            let window_str = s[slash_pos + 1..].trim();
+
             let rate: u64 =
                 rate_str
-                    .trim()
                     .parse()
                     .map_err(|_| PolicyError::InvalidKeepExpression {
                         expression: s.to_string(),
                         reason: "invalid rate value".to_string(),
                     })?;
 
-            return Ok(CompiledKeep::RatePerSecond(rate));
-        }
+            let window_secs = if let Some(dur_str) = window_str.strip_suffix('s') {
+                let dur_str = dur_str.trim();
+                if dur_str.is_empty() {
+                    1
+                } else {
+                    dur_str.parse::<u64>().map_err(|_| {
+                        PolicyError::InvalidKeepExpression {
+                            expression: s.to_string(),
+                            reason: "invalid duration value".to_string(),
+                        }
+                    })?
+                }
+            } else if let Some(dur_str) = window_str.strip_suffix('m') {
+                let dur_str = dur_str.trim();
+                let multiplier: u64 = if dur_str.is_empty() {
+                    1
+                } else {
+                    dur_str.parse().map_err(|_| {
+                        PolicyError::InvalidKeepExpression {
+                            expression: s.to_string(),
+                            reason: "invalid duration value".to_string(),
+                        }
+                    })?
+                };
+                multiplier * 60
+            } else {
+                return Err(PolicyError::InvalidKeepExpression {
+                    expression: s.to_string(),
+                    reason: "rate limit window must end with 's' or 'm'".to_string(),
+                });
+            };
 
-        // Check for rate per minute: "N/m"
-        if let Some(rate_str) = s.strip_suffix("/m") {
-            let rate: u64 =
-                rate_str
-                    .trim()
-                    .parse()
-                    .map_err(|_| PolicyError::InvalidKeepExpression {
-                        expression: s.to_string(),
-                        reason: "invalid rate value".to_string(),
-                    })?;
+            if window_secs == 0 {
+                return Err(PolicyError::InvalidKeepExpression {
+                    expression: s.to_string(),
+                    reason: "duration must be a positive integer".to_string(),
+                });
+            }
 
-            return Ok(CompiledKeep::RatePerMinute(rate));
+            return Ok(CompiledKeep::RateLimit {
+                limit: rate,
+                window_secs,
+            });
         }
 
         Err(PolicyError::InvalidKeepExpression {
@@ -112,14 +142,13 @@ impl CompiledKeep {
     /// Scores:
     /// - `None` = 1000 (most restrictive)
     /// - `Percentage(p)` = 100 - (p * 100) (lower percentage = more restrictive)
-    /// - `RatePerSecond/Minute` = 10
+    /// - `RateLimit` = 10
     /// - `All` = 0 (least restrictive)
     pub fn restrictiveness(&self) -> u32 {
         match self {
             CompiledKeep::None => 1000,
             CompiledKeep::Percentage(p) => (100.0 - (p * 100.0)) as u32,
-            CompiledKeep::RatePerSecond(_) => 10,
-            CompiledKeep::RatePerMinute(_) => 10,
+            CompiledKeep::RateLimit { .. } => 10,
             CompiledKeep::All => 0,
         }
     }
@@ -169,11 +198,17 @@ mod tests {
     fn parse_rate_per_second() {
         assert_eq!(
             CompiledKeep::parse("100/s").unwrap(),
-            CompiledKeep::RatePerSecond(100)
+            CompiledKeep::RateLimit {
+                limit: 100,
+                window_secs: 1
+            }
         );
         assert_eq!(
             CompiledKeep::parse(" 50 /s").unwrap(),
-            CompiledKeep::RatePerSecond(50)
+            CompiledKeep::RateLimit {
+                limit: 50,
+                window_secs: 1
+            }
         );
     }
 
@@ -181,19 +216,73 @@ mod tests {
     fn parse_rate_per_minute() {
         assert_eq!(
             CompiledKeep::parse("1000/m").unwrap(),
-            CompiledKeep::RatePerMinute(1000)
+            CompiledKeep::RateLimit {
+                limit: 1000,
+                window_secs: 60
+            }
         );
         assert_eq!(
             CompiledKeep::parse(" 500 /m").unwrap(),
-            CompiledKeep::RatePerMinute(500)
+            CompiledKeep::RateLimit {
+                limit: 500,
+                window_secs: 60
+            }
         );
+    }
+
+    #[test]
+    fn parse_rate_arbitrary_duration() {
+        // N/Ds format
+        assert_eq!(
+            CompiledKeep::parse("1/5s").unwrap(),
+            CompiledKeep::RateLimit {
+                limit: 1,
+                window_secs: 5
+            }
+        );
+        assert_eq!(
+            CompiledKeep::parse("1/300s").unwrap(),
+            CompiledKeep::RateLimit {
+                limit: 1,
+                window_secs: 300
+            }
+        );
+        // N/Dm format
+        assert_eq!(
+            CompiledKeep::parse("10/5m").unwrap(),
+            CompiledKeep::RateLimit {
+                limit: 10,
+                window_secs: 300
+            }
+        );
+        // Whitespace tolerance
+        assert_eq!(
+            CompiledKeep::parse(" 5 / 10s").unwrap(),
+            CompiledKeep::RateLimit {
+                limit: 5,
+                window_secs: 10
+            }
+        );
+    }
+
+    #[test]
+    fn parse_rate_invalid_duration() {
+        // Float duration
+        assert!(CompiledKeep::parse("1/1.5s").is_err());
+        // Zero duration
+        assert!(CompiledKeep::parse("1/0s").is_err());
+        assert!(CompiledKeep::parse("1/0m").is_err());
+        // Unsupported unit
+        assert!(CompiledKeep::parse("100/h").is_err());
+        assert!(CompiledKeep::parse("100/5h").is_err());
+        // Float rate
+        assert!(CompiledKeep::parse("1.5/s").is_err());
     }
 
     #[test]
     fn parse_invalid() {
         assert!(CompiledKeep::parse("invalid").is_err());
         assert!(CompiledKeep::parse("50").is_err());
-        assert!(CompiledKeep::parse("100/h").is_err());
     }
 
     #[test]
@@ -202,7 +291,11 @@ mod tests {
         let pct_10 = CompiledKeep::Percentage(0.1).restrictiveness();
         let pct_50 = CompiledKeep::Percentage(0.5).restrictiveness();
         let pct_90 = CompiledKeep::Percentage(0.9).restrictiveness();
-        let rate = CompiledKeep::RatePerSecond(100).restrictiveness();
+        let rate = CompiledKeep::RateLimit {
+            limit: 100,
+            window_secs: 1,
+        }
+        .restrictiveness();
         let all = CompiledKeep::All.restrictiveness();
 
         // none is most restrictive

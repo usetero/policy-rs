@@ -164,13 +164,9 @@ impl PolicyEngine {
             CompiledKeep::None => false,
             CompiledKeep::All => true,
             CompiledKeep::Percentage(p) => should_sample_log(*p, sample_key_value.as_deref()),
-            CompiledKeep::RatePerSecond(limit) => {
+            CompiledKeep::RateLimit { limit, window_secs } => {
                 self.rate_limiters
-                    .check(&winner.id, *limit, Duration::from_secs(1))
-            }
-            CompiledKeep::RatePerMinute(limit) => {
-                self.rate_limiters
-                    .check(&winner.id, *limit, Duration::from_secs(60))
+                    .check(&winner.id, *limit, Duration::from_secs(*window_secs))
             }
         };
 
@@ -207,7 +203,7 @@ impl PolicyEngine {
                 keep: will_keep,
                 transformed,
             }),
-            CompiledKeep::RatePerSecond(_) | CompiledKeep::RatePerMinute(_) => {
+            CompiledKeep::RateLimit { .. } => {
                 Ok(EvaluateResult::RateLimit {
                     policy_id: winner.id.clone(),
                     allowed: will_keep,
@@ -249,21 +245,10 @@ impl PolicyEngine {
                     transformed: keep && transformed,
                 }
             }
-            CompiledKeep::RatePerSecond(limit) => {
+            CompiledKeep::RateLimit { limit, window_secs } => {
                 let allowed = self
                     .rate_limiters
-                    .check(policy_id, *limit, Duration::from_secs(1));
-                EvaluateResult::RateLimit {
-                    policy_id: policy_id.to_string(),
-                    allowed,
-                    // Only report transformed if we're allowing the log
-                    transformed: allowed && transformed,
-                }
-            }
-            CompiledKeep::RatePerMinute(limit) => {
-                let allowed = self
-                    .rate_limiters
-                    .check(policy_id, *limit, Duration::from_secs(60));
+                    .check(policy_id, *limit, Duration::from_secs(*window_secs));
                 EvaluateResult::RateLimit {
                     policy_id: policy_id.to_string(),
                     allowed,
