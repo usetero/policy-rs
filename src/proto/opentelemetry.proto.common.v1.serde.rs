@@ -37,6 +37,9 @@ impl serde::Serialize for AnyValue {
                     #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("bytesValue", pbjson::private::base64::encode(&v).as_str())?;
                 }
+                any_value::Value::StringValueStrindex(v) => {
+                    struct_ser.serialize_field("stringValueStrindex", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -63,6 +66,8 @@ impl<'de> serde::Deserialize<'de> for AnyValue {
             "kvlistValue",
             "bytes_value",
             "bytesValue",
+            "string_value_strindex",
+            "stringValueStrindex",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -74,6 +79,7 @@ impl<'de> serde::Deserialize<'de> for AnyValue {
             ArrayValue,
             KvlistValue,
             BytesValue,
+            StringValueStrindex,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -102,6 +108,7 @@ impl<'de> serde::Deserialize<'de> for AnyValue {
                             "arrayValue" | "array_value" => Ok(GeneratedField::ArrayValue),
                             "kvlistValue" | "kvlist_value" => Ok(GeneratedField::KvlistValue),
                             "bytesValue" | "bytes_value" => Ok(GeneratedField::BytesValue),
+                            "stringValueStrindex" | "string_value_strindex" => Ok(GeneratedField::StringValueStrindex),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -167,6 +174,12 @@ impl<'de> serde::Deserialize<'de> for AnyValue {
                                 return Err(serde::de::Error::duplicate_field("bytesValue"));
                             }
                             value__ = map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| any_value::Value::BytesValue(x.0));
+                        }
+                        GeneratedField::StringValueStrindex => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stringValueStrindex"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| any_value::Value::StringValueStrindex(x.0));
                         }
                     }
                 }
@@ -573,12 +586,18 @@ impl serde::Serialize for KeyValue {
         if self.value.is_some() {
             len += 1;
         }
+        if self.key_strindex != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("opentelemetry.proto.common.v1.KeyValue", len)?;
         if !self.key.is_empty() {
             struct_ser.serialize_field("key", &self.key)?;
         }
         if let Some(v) = self.value.as_ref() {
             struct_ser.serialize_field("value", v)?;
+        }
+        if self.key_strindex != 0 {
+            struct_ser.serialize_field("keyStrindex", &self.key_strindex)?;
         }
         struct_ser.end()
     }
@@ -592,12 +611,15 @@ impl<'de> serde::Deserialize<'de> for KeyValue {
         const FIELDS: &[&str] = &[
             "key",
             "value",
+            "key_strindex",
+            "keyStrindex",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Key,
             Value,
+            KeyStrindex,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -621,6 +643,7 @@ impl<'de> serde::Deserialize<'de> for KeyValue {
                         match value {
                             "key" => Ok(GeneratedField::Key),
                             "value" => Ok(GeneratedField::Value),
+                            "keyStrindex" | "key_strindex" => Ok(GeneratedField::KeyStrindex),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -642,6 +665,7 @@ impl<'de> serde::Deserialize<'de> for KeyValue {
             {
                 let mut key__ = None;
                 let mut value__ = None;
+                let mut key_strindex__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Key => {
@@ -656,11 +680,20 @@ impl<'de> serde::Deserialize<'de> for KeyValue {
                             }
                             value__ = map_.next_value()?;
                         }
+                        GeneratedField::KeyStrindex => {
+                            if key_strindex__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("keyStrindex"));
+                            }
+                            key_strindex__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(KeyValue {
                     key: key__.unwrap_or_default(),
                     value: value__,
+                    key_strindex: key_strindex__.unwrap_or_default(),
                 })
             }
         }

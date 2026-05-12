@@ -326,6 +326,10 @@ struct JsonLogRedact {
     #[serde(flatten)]
     field: JsonLogField,
     replacement: String,
+    /// Optional RE2 regex for targeted replacement. When unset, the full
+    /// field value is replaced; when set, only matching substrings are.
+    #[serde(default)]
+    regex: Option<String>,
 }
 
 /// Rename a field in a log record.
@@ -608,6 +612,7 @@ impl JsonLogRedact {
         Ok(pb::LogRedact {
             field: Some(self.field.into_redact_field(policy_id)?),
             replacement: self.replacement,
+            regex: self.regex,
         })
     }
 }
@@ -2130,6 +2135,47 @@ mod tests {
             transform.redact[0].field,
             Some(log_redact::Field::LogAttribute(_))
         ));
+        assert!(transform.redact[0].regex.is_none());
+    }
+
+    #[test]
+    fn load_policy_with_redact_regex_transform() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "redact-regex",
+                    "name": "Redact Regex",
+                    "log": {
+                        "match": [
+                            { "log_field": "body", "regex": ".*" }
+                        ],
+                        "keep": "all",
+                        "transform": {
+                            "redact": [
+                                {
+                                    "log_attribute": "body",
+                                    "replacement": "****",
+                                    "regex": "\\d{4}"
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        let transform = policies[0]
+            .log_target()
+            .unwrap()
+            .transform
+            .as_ref()
+            .unwrap();
+        assert_eq!(transform.redact.len(), 1);
+        assert_eq!(transform.redact[0].regex.as_deref(), Some(r"\d{4}"));
     }
 
     #[test]

@@ -1820,6 +1820,7 @@ mod tests {
             redact: vec![LogRedact {
                 field: Some(log_redact::Field::LogAttribute(attr_path("password"))),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             }],
             ..Default::default()
         };
@@ -1854,6 +1855,98 @@ mod tests {
         assert_eq!(
             log.log_attributes.get("password"),
             Some(&"[REDACTED]".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn evaluate_and_transform_redact_attribute_with_regex() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let transform = LogTransform {
+            redact: vec![LogRedact {
+                field: Some(log_redact::Field::LogAttribute(attr_path("body"))),
+                replacement: "****".to_string(),
+                regex: Some(r"\d{4}".to_string()),
+            }],
+            ..Default::default()
+        };
+
+        let policy = make_policy_with_transform(
+            "redact-card-digits",
+            vec![body_regex_matcher("payment", false)],
+            "all",
+            true,
+            Some(transform),
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let mut log = TestLog::new()
+            .with_body("payment received")
+            .with_log_attr("body", "card 4111 2222 3333 4444 ok");
+
+        let result = engine
+            .evaluate_and_transform(&snapshot, &mut log)
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            EvaluateResult::Keep {
+                policy_id: "redact-card-digits".to_string(),
+                transformed: true,
+            }
+        );
+        assert_eq!(
+            log.log_attributes.get("body"),
+            Some(&"card **** **** **** **** ok".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn evaluate_and_transform_redact_regex_no_match_leaves_value_unchanged() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let transform = LogTransform {
+            redact: vec![LogRedact {
+                field: Some(log_redact::Field::LogAttribute(attr_path("body"))),
+                replacement: "****".to_string(),
+                regex: Some(r"\d{4}".to_string()),
+            }],
+            ..Default::default()
+        };
+
+        let policy = make_policy_with_transform(
+            "redact-nomatch",
+            vec![body_regex_matcher("payment", false)],
+            "all",
+            true,
+            Some(transform),
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let mut log = TestLog::new()
+            .with_body("payment received")
+            .with_log_attr("body", "no digits here");
+
+        let result = engine
+            .evaluate_and_transform(&snapshot, &mut log)
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            EvaluateResult::Keep {
+                policy_id: "redact-nomatch".to_string(),
+                transformed: false,
+            }
+        );
+        assert_eq!(
+            log.log_attributes.get("body"),
+            Some(&"no digits here".to_string())
         );
     }
 
@@ -2066,6 +2159,7 @@ mod tests {
             redact: vec![LogRedact {
                 field: Some(log_redact::Field::LogAttribute(attr_path("nonexistent"))),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             }],
             ..Default::default()
         };
@@ -2109,6 +2203,7 @@ mod tests {
             redact: vec![LogRedact {
                 field: Some(log_redact::Field::LogAttribute(attr_path("secret"))),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             }],
             add: vec![LogAdd {
                 field: Some(log_add::Field::LogAttribute(attr_path("processed"))),
@@ -2170,6 +2265,7 @@ mod tests {
                     "also_nonexistent",
                 ))),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             }],
             ..Default::default()
         };

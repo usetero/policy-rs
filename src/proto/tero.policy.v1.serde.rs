@@ -826,12 +826,18 @@ impl serde::Serialize for LogRedact {
         if !self.replacement.is_empty() {
             len += 1;
         }
+        if self.regex.is_some() {
+            len += 1;
+        }
         if self.field.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("tero.policy.v1.LogRedact", len)?;
         if !self.replacement.is_empty() {
             struct_ser.serialize_field("replacement", &self.replacement)?;
+        }
+        if let Some(v) = self.regex.as_ref() {
+            struct_ser.serialize_field("regex", v)?;
         }
         if let Some(v) = self.field.as_ref() {
             match v {
@@ -862,6 +868,7 @@ impl<'de> serde::Deserialize<'de> for LogRedact {
     {
         const FIELDS: &[&str] = &[
             "replacement",
+            "regex",
             "log_field",
             "logField",
             "log_attribute",
@@ -875,6 +882,7 @@ impl<'de> serde::Deserialize<'de> for LogRedact {
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Replacement,
+            Regex,
             LogField,
             LogAttribute,
             ResourceAttribute,
@@ -901,6 +909,7 @@ impl<'de> serde::Deserialize<'de> for LogRedact {
                     {
                         match value {
                             "replacement" => Ok(GeneratedField::Replacement),
+                            "regex" => Ok(GeneratedField::Regex),
                             "logField" | "log_field" => Ok(GeneratedField::LogField),
                             "logAttribute" | "log_attribute" => Ok(GeneratedField::LogAttribute),
                             "resourceAttribute" | "resource_attribute" => Ok(GeneratedField::ResourceAttribute),
@@ -925,6 +934,7 @@ impl<'de> serde::Deserialize<'de> for LogRedact {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut replacement__ = None;
+                let mut regex__ = None;
                 let mut field__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -933,6 +943,12 @@ impl<'de> serde::Deserialize<'de> for LogRedact {
                                 return Err(serde::de::Error::duplicate_field("replacement"));
                             }
                             replacement__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Regex => {
+                            if regex__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("regex"));
+                            }
+                            regex__ = map_.next_value()?;
                         }
                         GeneratedField::LogField => {
                             if field__.is_some() {
@@ -965,6 +981,7 @@ impl<'de> serde::Deserialize<'de> for LogRedact {
                 }
                 Ok(LogRedact {
                     replacement: replacement__.unwrap_or_default(),
+                    regex: regex__,
                     field: field__,
                 })
             }

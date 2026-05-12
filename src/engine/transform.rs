@@ -1,5 +1,8 @@
 //! Compiled transform structures for efficient application.
 
+use regex::Regex;
+
+use crate::error::PolicyError;
 use crate::field::LogFieldSelector;
 use crate::proto::tero::policy::v1::{
     LogField, LogTransform, log_add, log_redact, log_remove, log_rename,
@@ -15,9 +18,16 @@ pub enum TransformOp<S: Signal> {
     /// Remove a field entirely.
     Remove { field: S::FieldSelector },
     /// Redact a field by replacing its value.
+    ///
+    /// When `regex` is `None`, the entire field value is replaced with
+    /// `replacement`. When `regex` is `Some`, all non-overlapping matches of
+    /// the pattern in the field value are replaced using `replacement` as a
+    /// template (supports `$N`/`${name}` capture references). If no match is
+    /// found, the field is left unchanged.
     Redact {
         field: S::FieldSelector,
         replacement: String,
+        regex: Option<Regex>,
     },
     /// Rename a field to a new attribute key.
     Rename {
@@ -78,13 +88,38 @@ impl<S: Signal> CompiledTransform<S> {
                     }
                     result
                 }
-                TransformOp::Redact { field, replacement } => {
-                    // Guard: only call redact_field if the field actually exists.
-                    // Per spec, redact on a nonexistent field MUST be a no-op.
-                    let result = if record.get_field(field).is_some() {
-                        record.redact_field(field, replacement)
-                    } else {
-                        false
+                TransformOp::Redact {
+                    field,
+                    replacement,
+                    regex,
+                } => {
+                    // Per spec:
+                    // - Redact on a nonexistent field MUST be a no-op.
+                    // - When `regex` is set and produces no match, no
+                    //   modification is applied.
+                    // - When `regex` is unset, the entire value is replaced.
+                    let result = match regex {
+                        Some(re) => {
+                            let current = record.get_field(field).map(|c| c.into_owned());
+                            match current {
+                                Some(current) => {
+                                    let new_value = re.replace_all(&current, replacement.as_str());
+                                    if new_value == current {
+                                        false
+                                    } else {
+                                        record.redact_field(field, &new_value)
+                                    }
+                                }
+                                None => false,
+                            }
+                        }
+                        None => {
+                            if record.get_field(field).is_some() {
+                                record.redact_field(field, replacement)
+                            } else {
+                                false
+                            }
+                        }
                     };
                     if let Some(s) = stats {
                         if result {
@@ -138,7 +173,9 @@ impl<S: Signal> CompiledTransform<S> {
 /// Log-specific transform compilation from proto.
 impl CompiledTransform<LogSignal> {
     /// Build from proto LogTransform.
-    pub fn from_proto(transform: &LogTransform) -> Self {
+    ///
+    /// Returns an error if any redact regex fails to compile.
+    pub fn from_proto(transform: &LogTransform, policy_id: &str) -> Result<Self, PolicyError> {
         let mut ops = Vec::new();
 
         // Remove operations first
@@ -151,9 +188,19 @@ impl CompiledTransform<LogSignal> {
         // Redact operations second
         for redact in &transform.redact {
             if let Some(field) = Self::convert_redact_field(&redact.field) {
+                let regex = match &redact.regex {
+                    Some(pattern) => {
+                        Some(Regex::new(pattern).map_err(|e| PolicyError::InvalidPolicy {
+                            policy_id: policy_id.to_string(),
+                            reason: format!("invalid redact regex '{}': {}", pattern, e),
+                        })?)
+                    }
+                    None => None,
+                };
                 ops.push(TransformOp::Redact {
                     field,
                     replacement: redact.replacement.clone(),
+                    regex,
                 });
             }
         }
@@ -180,7 +227,7 @@ impl CompiledTransform<LogSignal> {
             }
         }
 
-        Self { ops }
+        Ok(Self { ops })
     }
 
     fn convert_remove_field(field: &Option<log_remove::Field>) -> Option<LogFieldSelector> {
@@ -390,7 +437,7 @@ mod tests {
     #[test]
     fn from_proto_empty() {
         let proto = LogTransform::default();
-        let compiled = CompiledTransform::<LogSignal>::from_proto(&proto);
+        let compiled = CompiledTransform::<LogSignal>::from_proto(&proto, "p").unwrap();
         assert!(compiled.is_empty());
     }
 
@@ -402,7 +449,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let compiled = CompiledTransform::from_proto(&proto);
+        let compiled = CompiledTransform::from_proto(&proto, "p").unwrap();
         assert_eq!(compiled.ops.len(), 1);
         assert!(matches!(&compiled.ops[0], TransformOp::Remove { field }
             if matches!(field, LogFieldSelector::Simple(LogField::Body))));
@@ -417,16 +464,58 @@ mod tests {
                     path: vec!["secret".to_string()],
                 })),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             }],
             ..Default::default()
         };
-        let compiled = CompiledTransform::from_proto(&proto);
+        let compiled = CompiledTransform::from_proto(&proto, "p").unwrap();
         assert_eq!(compiled.ops.len(), 1);
-        assert!(
-            matches!(&compiled.ops[0], TransformOp::Redact { field, replacement }
+        assert!(matches!(
+            &compiled.ops[0],
+            TransformOp::Redact { field, replacement, regex: None }
             if matches!(field, LogFieldSelector::LogAttribute(p) if p == &vec!["secret".to_string()])
-            && replacement == "[REDACTED]")
-        );
+            && replacement == "[REDACTED]"
+        ));
+    }
+
+    #[test]
+    fn from_proto_with_redact_regex_compiles() {
+        use crate::proto::tero::policy::v1::AttributePath;
+        let proto = LogTransform {
+            redact: vec![LogRedact {
+                field: Some(log_redact::Field::LogAttribute(AttributePath {
+                    path: vec!["card".to_string()],
+                })),
+                replacement: "****".to_string(),
+                regex: Some(r"\d{4}".to_string()),
+            }],
+            ..Default::default()
+        };
+        let compiled = CompiledTransform::from_proto(&proto, "p").unwrap();
+        assert!(matches!(
+            &compiled.ops[0],
+            TransformOp::Redact { regex: Some(_), .. }
+        ));
+    }
+
+    #[test]
+    fn from_proto_with_invalid_redact_regex_returns_error() {
+        use crate::proto::tero::policy::v1::AttributePath;
+        let proto = LogTransform {
+            redact: vec![LogRedact {
+                field: Some(log_redact::Field::LogAttribute(AttributePath {
+                    path: vec!["card".to_string()],
+                })),
+                replacement: "****".to_string(),
+                regex: Some("(".to_string()),
+            }],
+            ..Default::default()
+        };
+        let err = CompiledTransform::from_proto(&proto, "bad-policy").unwrap_err();
+        assert!(matches!(
+            err,
+            PolicyError::InvalidPolicy { ref policy_id, .. } if policy_id == "bad-policy"
+        ));
     }
 
     #[test]
@@ -442,7 +531,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let compiled = CompiledTransform::from_proto(&proto);
+        let compiled = CompiledTransform::from_proto(&proto, "p").unwrap();
         assert_eq!(compiled.ops.len(), 1);
         assert!(
             matches!(&compiled.ops[0], TransformOp::Rename { from, to, upsert }
@@ -464,7 +553,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let compiled = CompiledTransform::from_proto(&proto);
+        let compiled = CompiledTransform::from_proto(&proto, "p").unwrap();
         assert_eq!(compiled.ops.len(), 1);
         assert!(
             matches!(&compiled.ops[0], TransformOp::Add { field, value, upsert }
@@ -501,9 +590,10 @@ mod tests {
                     path: vec!["redact".to_string()],
                 })),
                 replacement: "X".to_string(),
+                regex: None,
             }],
         };
-        let compiled = CompiledTransform::from_proto(&proto);
+        let compiled = CompiledTransform::from_proto(&proto, "p").unwrap();
         assert_eq!(compiled.ops.len(), 4);
 
         assert!(matches!(&compiled.ops[0], TransformOp::Remove { .. }));
@@ -524,6 +614,7 @@ mod tests {
                 TransformOp::Redact {
                     field: LogFieldSelector::LogAttribute(vec!["secret".to_string()]),
                     replacement: "[REDACTED]".to_string(),
+                    regex: None,
                 },
                 TransformOp::Rename {
                     from: LogFieldSelector::LogAttribute(vec!["old_name".to_string()]),
@@ -561,6 +652,7 @@ mod tests {
                 TransformOp::Redact {
                     field: LogFieldSelector::LogAttribute(vec!["nonexistent".to_string()]),
                     replacement: "X".to_string(),
+                    regex: None,
                 },
             ],
         };
@@ -579,6 +671,7 @@ mod tests {
             ops: vec![TransformOp::Redact {
                 field: LogFieldSelector::LogAttribute(vec!["missing".to_string()]),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             }],
         };
 
@@ -588,5 +681,74 @@ mod tests {
         assert!(!log.attributes.contains_key("missing"));
         // Existing attributes must be unchanged
         assert_eq!(log.attributes.get("existing"), Some(&"keep-me".to_string()));
+    }
+
+    #[test]
+    fn redact_with_regex_replaces_matching_substrings() {
+        let mut log = TestLog::new().with_attr("body", "card 4111 2222 3333 4444 expires soon");
+        let transform = CompiledTransform::<LogSignal> {
+            ops: vec![TransformOp::Redact {
+                field: LogFieldSelector::LogAttribute(vec!["body".to_string()]),
+                replacement: "****".to_string(),
+                regex: Some(Regex::new(r"\d{4}").unwrap()),
+            }],
+        };
+        let applied = transform.apply(&mut log);
+        assert_eq!(applied, 1);
+        assert_eq!(
+            log.attributes.get("body"),
+            Some(&"card **** **** **** **** expires soon".to_string())
+        );
+    }
+
+    #[test]
+    fn redact_with_regex_no_match_leaves_value_unchanged() {
+        let mut log = TestLog::new().with_attr("body", "no digits here");
+        let transform = CompiledTransform::<LogSignal> {
+            ops: vec![TransformOp::Redact {
+                field: LogFieldSelector::LogAttribute(vec!["body".to_string()]),
+                replacement: "****".to_string(),
+                regex: Some(Regex::new(r"\d{4}").unwrap()),
+            }],
+        };
+        let applied = transform.apply(&mut log);
+        assert_eq!(applied, 0);
+        assert_eq!(
+            log.attributes.get("body"),
+            Some(&"no digits here".to_string())
+        );
+    }
+
+    #[test]
+    fn redact_with_regex_supports_capture_group_template() {
+        let mut log = TestLog::new().with_attr("body", "email alice@example.com here");
+        let transform = CompiledTransform::<LogSignal> {
+            ops: vec![TransformOp::Redact {
+                field: LogFieldSelector::LogAttribute(vec!["body".to_string()]),
+                replacement: "$1@***".to_string(),
+                regex: Some(Regex::new(r"(\w+)@[\w.]+").unwrap()),
+            }],
+        };
+        let applied = transform.apply(&mut log);
+        assert_eq!(applied, 1);
+        assert_eq!(
+            log.attributes.get("body"),
+            Some(&"email alice@*** here".to_string())
+        );
+    }
+
+    #[test]
+    fn redact_with_regex_on_nonexistent_field_is_noop() {
+        let mut log = TestLog::new();
+        let transform = CompiledTransform::<LogSignal> {
+            ops: vec![TransformOp::Redact {
+                field: LogFieldSelector::LogAttribute(vec!["missing".to_string()]),
+                replacement: "****".to_string(),
+                regex: Some(Regex::new(r"\d+").unwrap()),
+            }],
+        };
+        let applied = transform.apply(&mut log);
+        assert_eq!(applied, 0);
+        assert!(!log.attributes.contains_key("missing"));
     }
 }
