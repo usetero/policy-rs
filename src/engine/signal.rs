@@ -109,9 +109,7 @@ impl Signal for TraceSignal {
             TraceFieldSelector::ResourceAttribute(_) => {
                 Some(TraceFieldSelector::ResourceAttribute(path))
             }
-            TraceFieldSelector::ScopeAttribute(_) => {
-                Some(TraceFieldSelector::ScopeAttribute(path))
-            }
+            TraceFieldSelector::ScopeAttribute(_) => Some(TraceFieldSelector::ScopeAttribute(path)),
             _ => None,
         }
     }

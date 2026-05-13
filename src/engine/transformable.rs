@@ -89,9 +89,7 @@ mod tests {
 
         fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
             match field {
-                LogFieldSelector::Simple(LogField::Body) => {
-                    self.body.as_deref().map(Cow::Borrowed)
-                }
+                LogFieldSelector::Simple(LogField::Body) => self.body.as_deref().map(Cow::Borrowed),
                 LogFieldSelector::Simple(LogField::SeverityText) => {
                     self.severity.as_deref().map(Cow::Borrowed)
                 }
@@ -125,9 +123,7 @@ mod tests {
         fn delete_field(&mut self, field: &LogFieldSelector) -> bool {
             match field {
                 LogFieldSelector::Simple(LogField::Body) => self.body.take().is_some(),
-                LogFieldSelector::Simple(LogField::SeverityText) => {
-                    self.severity.take().is_some()
-                }
+                LogFieldSelector::Simple(LogField::SeverityText) => self.severity.take().is_some(),
                 LogFieldSelector::LogAttribute(path) => path
                     .first()
                     .and_then(|key| self.attributes.remove(key))
