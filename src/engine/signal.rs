@@ -113,9 +113,7 @@ impl Signal for TraceSignal {
                 Some(TraceFieldSelector::ResourceAttribute(path))
             }
             TraceFieldSelector::ScopeAttribute(_) => Some(TraceFieldSelector::ScopeAttribute(path)),
-            TraceFieldSelector::EventAttribute(_) => {
-                Some(TraceFieldSelector::EventAttribute(path))
-            }
+            TraceFieldSelector::EventAttribute(_) => Some(TraceFieldSelector::EventAttribute(path)),
             // Renaming non-attribute fields is not expressible in the proto.
             TraceFieldSelector::Simple(_)
             | TraceFieldSelector::SpanKind
