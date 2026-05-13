@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/usetero/policy-rs/compare/v1.5.0...v1.6.0) (2026-05-13)
+
+
+### Features
+
+* support regex, policy 1.4.0 ([#80](https://github.com/usetero/policy-rs/issues/80)) ([908a6a6](https://github.com/usetero/policy-rs/commit/908a6a645745cd8ca38232a3f16e94d8c0bb07b9))
+
 ## [1.5.0](https://github.com/usetero/policy-rs/compare/v1.4.12...v1.5.0) (2026-04-06)
 
 
