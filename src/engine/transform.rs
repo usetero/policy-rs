@@ -1,4 +1,13 @@
 //! Compiled transform structures for efficient application.
+//!
+//! # Operation ordering
+//!
+//! Within a single policy's transform, operations are applied in a fixed,
+//! observable order: **remove → redact → rename → add**. This ordering is
+//! part of the spec — it lets a policy author redact a field's contents,
+//! then rename it, then ensure a sibling field exists, all in a single pass,
+//! without worrying about which step shadows which. The same ordering is
+//! mirrored by every reference implementation (Go, Zig).
 
 use regex::Regex;
 
@@ -45,7 +54,8 @@ pub enum TransformOp<S: Signal> {
 
 /// Compiled transforms for a single policy.
 ///
-/// Operations are stored in execution order: remove, redact, rename, add.
+/// Operations are stored — and applied — in the spec-defined execution order
+/// (remove, redact, rename, add). See the module-level docs for rationale.
 #[derive(Debug, Clone)]
 pub struct CompiledTransform<S: Signal> {
     /// Operations to apply, in order.
@@ -142,9 +152,18 @@ impl<S: Signal> CompiledTransform<S> {
                     let result = if !record.field_exists(from) {
                         false
                     } else if let Some(to_selector) = S::rename_target(from, to) {
-                        if !*upsert && record.field_exists(&to_selector) {
+                        let target_exists = record.field_exists(&to_selector);
+                        if target_exists && !*upsert {
                             false
                         } else {
+                            // Upsert: clear the destination first so consumers
+                            // backed by append-style storage (e.g. raw protobuf
+                            // KeyValue vectors) can't produce duplicate keys.
+                            // No-op for HashMap-backed consumers since
+                            // `move_field` already overwrites them.
+                            if target_exists {
+                                record.delete_field(&to_selector);
+                            }
                             record.move_field(from, &to_selector);
                             true
                         }

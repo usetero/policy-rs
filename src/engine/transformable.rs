@@ -33,15 +33,18 @@ pub trait Transformable: Matchable {
     /// keeping the move within the same namespace.
     ///
     /// The engine guarantees:
-    /// - `from` exists at the time of the call (checked via
-    ///   [`Matchable::field_exists`]).
-    /// - Upsert preconditions on `to` have been validated.
+    /// - `from` exists at the time of the call (via [`Matchable::field_exists`]).
+    /// - `to` does not exist at the time of the call — when an upsert overwrite
+    ///   would have been required, the engine has already called
+    ///   [`Transformable::delete_field`] on `to`. Implementors therefore do
+    ///   not need to handle target-collision (no need to clear or overwrite
+    ///   the destination), and the primitive is safe even for append-style
+    ///   storage that can't deduplicate by key.
     ///
-    /// Implementors should therefore unconditionally perform the move and
-    /// must not re-check existence or upsert semantics. The move should
-    /// preserve the underlying value type (e.g. for OTel records, the
-    /// non-string value variants should be copied as-is rather than
-    /// stringified).
+    /// Implementors should perform the move unconditionally and must not
+    /// re-check existence or upsert semantics. The move should preserve the
+    /// underlying value type (for OTel records, the non-string value variants
+    /// should be copied as-is rather than stringified).
     fn move_field(
         &mut self,
         from: &<Self::Signal as Signal>::FieldSelector,

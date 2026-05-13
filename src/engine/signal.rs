@@ -86,7 +86,10 @@ impl Signal for MetricSignal {
             MetricFieldSelector::ScopeAttribute(_) => {
                 Some(MetricFieldSelector::ScopeAttribute(path))
             }
-            _ => None,
+            // Renaming non-attribute fields is not expressible in the proto.
+            MetricFieldSelector::Simple(_)
+            | MetricFieldSelector::Type
+            | MetricFieldSelector::Temporality => None,
         }
     }
 }
@@ -110,7 +113,16 @@ impl Signal for TraceSignal {
                 Some(TraceFieldSelector::ResourceAttribute(path))
             }
             TraceFieldSelector::ScopeAttribute(_) => Some(TraceFieldSelector::ScopeAttribute(path)),
-            _ => None,
+            TraceFieldSelector::EventAttribute(_) => {
+                Some(TraceFieldSelector::EventAttribute(path))
+            }
+            // Renaming non-attribute fields is not expressible in the proto.
+            TraceFieldSelector::Simple(_)
+            | TraceFieldSelector::SpanKind
+            | TraceFieldSelector::SpanStatus
+            | TraceFieldSelector::EventName
+            | TraceFieldSelector::LinkTraceId
+            | TraceFieldSelector::SamplingThreshold => None,
         }
     }
 }

@@ -159,11 +159,42 @@ impl Matchable for MyLogRecord {
 The default `field_exists` is `self.get_field(field).is_some()`, which is
 correct as long as every present value is a string. If your records carry
 non-string values (numbers, booleans, structured values), override
-`field_exists` so `exists: true` matchers report presence correctly:
+`field_exists` so `exists: true` matchers fire on those attributes — a record
+whose `count: 42` lives only as an integer would otherwise be reported as
+absent because `get_field` cannot return a string for it.
+
+For example, a record that holds OTel-style typed values:
 
 ```rust
-impl Matchable for MyLogRecord {
-    // ... get_field as above ...
+enum AnyValue {
+    String(String),
+    Int(i64),
+    Bool(bool),
+}
+
+struct OtelLogRecord {
+    body: String,
+    attributes: HashMap<String, AnyValue>,
+}
+
+impl Matchable for OtelLogRecord {
+    type Signal = LogSignal;
+
+    fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
+        match field {
+            LogFieldSelector::Simple(LogField::Body) => Some(Cow::Borrowed(&self.body)),
+            LogFieldSelector::LogAttribute(path) => match path
+                .first()
+                .and_then(|key| self.attributes.get(key))?
+            {
+                AnyValue::String(s) => Some(Cow::Borrowed(s.as_str())),
+                // Int/Bool aren't representable as a borrowed &str — return
+                // None and rely on field_exists for presence checks.
+                _ => None,
+            },
+            _ => None,
+        }
+    }
 
     fn field_exists(&self, field: &LogFieldSelector) -> bool {
         match field {
@@ -176,6 +207,10 @@ impl Matchable for MyLogRecord {
     }
 }
 ```
+
+Without the override, a policy with `exists: true` on `count` (stored as
+`AnyValue::Int(42)`) would not fire, because `get_field` correctly returns
+`None` for a value that can't be expressed as a string.
 
 ### Transformable Trait
 

@@ -2178,6 +2178,62 @@ mod tests {
         assert_eq!(transform.redact[0].regex.as_deref(), Some(r"\d{4}"));
     }
 
+    /// End-to-end roundtrip: JSON `regex` field survives parse → compile and
+    /// reaches the engine's `CompiledTransform` as `Some(Regex)`.
+    #[test]
+    fn load_policy_with_redact_regex_survives_compilation() {
+        use crate::engine::{CompiledMatchers, LogSignal, TransformOp};
+        use crate::registry::PolicyStats;
+        use std::sync::Arc;
+
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "redact-regex-roundtrip",
+                    "name": "Redact Regex Roundtrip",
+                    "log": {
+                        "match": [
+                            { "log_field": "body", "regex": ".+" }
+                        ],
+                        "keep": "all",
+                        "transform": {
+                            "redact": [
+                                {
+                                    "log_attribute": "card",
+                                    "replacement": "****",
+                                    "regex": "\\d{4}"
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }"#;
+
+        let file = create_temp_policy_file(content);
+        let provider = FileProvider::new(file.path());
+        let policies = provider.load().unwrap();
+
+        let stats = Arc::new(PolicyStats::default());
+        let compiled =
+            CompiledMatchers::<LogSignal>::build(policies.into_iter().map(|p| (p, stats.clone())))
+                .unwrap();
+        let compiled_transform = compiled.policies[0]
+            .transform
+            .as_ref()
+            .expect("transform should compile to Some");
+        assert_eq!(compiled_transform.ops.len(), 1);
+        match &compiled_transform.ops[0] {
+            TransformOp::Redact { regex, .. } => {
+                assert!(
+                    regex.is_some(),
+                    "regex from JSON must survive compilation as Some(Regex)"
+                );
+            }
+            other => panic!("expected TransformOp::Redact, got {other:?}"),
+        }
+    }
+
     #[test]
     fn load_policy_with_rename_transform() {
         let content = r#"{
