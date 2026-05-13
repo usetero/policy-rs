@@ -69,6 +69,11 @@ impl<S: Signal> CompiledTransform<S> {
     /// Apply all operations to a transformable record, recording stats.
     ///
     /// Returns the number of operations that were successfully applied.
+    ///
+    /// The engine drives high-level semantics (regex matching, upsert
+    /// preconditions, source-absent no-ops) by composing the record's three
+    /// [`Transformable`] primitives — `set_field`, `delete_field`,
+    /// `move_field` — with [`Matchable::field_exists`] and `get_field` checks.
     pub fn apply_with_stats<T: Transformable<Signal = S>>(
         &self,
         record: &mut T,
@@ -78,7 +83,7 @@ impl<S: Signal> CompiledTransform<S> {
         for op in &self.ops {
             let success = match op {
                 TransformOp::Remove { field } => {
-                    let result = record.remove_field(field);
+                    let result = record.delete_field(field);
                     if let Some(s) = stats {
                         if result {
                             s.remove.record_hit();
@@ -107,15 +112,18 @@ impl<S: Signal> CompiledTransform<S> {
                                     if new_value == current {
                                         false
                                     } else {
-                                        record.redact_field(field, &new_value)
+                                        let owned = new_value.into_owned();
+                                        record.set_field(field, &owned);
+                                        true
                                     }
                                 }
                                 None => false,
                             }
                         }
                         None => {
-                            if record.get_field(field).is_some() {
-                                record.redact_field(field, replacement)
+                            if record.field_exists(field) {
+                                record.set_field(field, replacement);
+                                true
                             } else {
                                 false
                             }
@@ -131,7 +139,19 @@ impl<S: Signal> CompiledTransform<S> {
                     result
                 }
                 TransformOp::Rename { from, to, upsert } => {
-                    let result = record.rename_field(from, to, *upsert);
+                    let result = if !record.field_exists(from) {
+                        false
+                    } else if let Some(to_selector) = S::rename_target(from, to) {
+                        if !*upsert && record.field_exists(&to_selector) {
+                            false
+                        } else {
+                            record.move_field(from, &to_selector);
+                            true
+                        }
+                    } else {
+                        // Rename of a simple field is a no-op (matches Go/Zig).
+                        false
+                    };
                     if let Some(s) = stats {
                         if result {
                             s.rename.record_hit();
@@ -146,7 +166,12 @@ impl<S: Signal> CompiledTransform<S> {
                     value,
                     upsert,
                 } => {
-                    let result = record.add_field(field, value, *upsert);
+                    let result = if !*upsert && record.field_exists(field) {
+                        false
+                    } else {
+                        record.set_field(field, value);
+                        true
+                    };
                     if let Some(s) = stats {
                         if result {
                             s.add.record_hit();
@@ -355,7 +380,21 @@ mod tests {
     }
 
     impl Transformable for TestLog {
-        fn remove_field(&mut self, field: &LogFieldSelector) -> bool {
+        fn set_field(&mut self, field: &LogFieldSelector, value: &str) {
+            match field {
+                LogFieldSelector::Simple(LogField::Body) => {
+                    self.body = Some(value.to_string());
+                }
+                LogFieldSelector::LogAttribute(path) => {
+                    if let Some(key) = path.first() {
+                        self.attributes.insert(key.clone(), value.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn delete_field(&mut self, field: &LogFieldSelector) -> bool {
             match field {
                 LogFieldSelector::Simple(LogField::Body) => self.body.take().is_some(),
                 LogFieldSelector::LogAttribute(path) => path
@@ -366,35 +405,7 @@ mod tests {
             }
         }
 
-        fn redact_field(&mut self, field: &LogFieldSelector, replacement: &str) -> bool {
-            match field {
-                LogFieldSelector::Simple(LogField::Body) => {
-                    if self.body.is_some() {
-                        self.body = Some(replacement.to_string());
-                        true
-                    } else {
-                        false
-                    }
-                }
-                LogFieldSelector::LogAttribute(path) => {
-                    let Some(key) = path.first() else {
-                        return false;
-                    };
-                    if self.attributes.contains_key(key) {
-                        self.attributes.insert(key.clone(), replacement.to_string());
-                        true
-                    } else {
-                        false
-                    }
-                }
-                _ => false,
-            }
-        }
-
-        fn rename_field(&mut self, from: &LogFieldSelector, to: &str, upsert: bool) -> bool {
-            if !upsert && self.attributes.contains_key(to) {
-                return false;
-            }
+        fn move_field(&mut self, from: &LogFieldSelector, to: &LogFieldSelector) {
             let value = match from {
                 LogFieldSelector::Simple(LogField::Body) => self.body.take(),
                 LogFieldSelector::LogAttribute(path) => {
@@ -402,34 +413,12 @@ mod tests {
                 }
                 _ => None,
             };
-            if let Some(v) = value {
-                self.attributes.insert(to.to_string(), v);
-                true
-            } else {
-                false
-            }
-        }
-
-        fn add_field(&mut self, field: &LogFieldSelector, value: &str, upsert: bool) -> bool {
-            match field {
-                LogFieldSelector::Simple(LogField::Body) => {
-                    if !upsert && self.body.is_some() {
-                        return false;
-                    }
-                    self.body = Some(value.to_string());
-                    true
-                }
-                LogFieldSelector::LogAttribute(path) => {
-                    let Some(key) = path.first() else {
-                        return false;
-                    };
-                    if !upsert && self.attributes.contains_key(key) {
-                        return false;
-                    }
-                    self.attributes.insert(key.clone(), value.to_string());
-                    true
-                }
-                _ => false,
+            let target_key = match to {
+                LogFieldSelector::LogAttribute(path) => path.first().cloned(),
+                _ => None,
+            };
+            if let (Some(v), Some(k)) = (value, target_key) {
+                self.attributes.insert(k, v);
             }
         }
     }

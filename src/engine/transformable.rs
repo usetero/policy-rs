@@ -5,54 +5,48 @@ use super::signal::Signal;
 
 /// Trait for types that can be transformed by policies.
 ///
-/// This uses a visitor pattern where the policy engine calls these methods
-/// to apply transformations, and the implementor handles the actual mutations
-/// to their data structure.
+/// Implementors expose three minimal write primitives — `set_field`,
+/// `delete_field`, and `move_field`. The engine drives the higher-level
+/// transform ops (redact-with-regex, add-with-upsert, rename-with-upsert)
+/// using these primitives plus the read side of [`Matchable`].
 ///
-/// Each method returns `true` if the operation was successfully applied.
-///
-/// `Transformable` requires `Matchable` so that the `Signal` associated type
-/// is shared — ensuring transforms operate on the same field selector type
-/// used for matching.
+/// `Transformable` requires `Matchable` so the engine can read the current
+/// value of a field (for regex redact) and check existence (for upsert
+/// preconditions and source-absent no-ops on rename).
 pub trait Transformable: Matchable {
-    /// Remove a field entirely.
+    /// Set the value of `field`. If the field already exists, its value is
+    /// overwritten; otherwise it is created.
     ///
-    /// Returns `true` if the field existed and was removed.
-    fn remove_field(&mut self, field: &<Self::Signal as Signal>::FieldSelector) -> bool;
+    /// `value` is borrowed for the duration of the call — copy it if you
+    /// need to retain it past the return.
+    fn set_field(&mut self, field: &<Self::Signal as Signal>::FieldSelector, value: &str);
 
-    /// Redact a field by replacing its value with the replacement string.
-    ///
-    /// Returns `true` if the field existed and was redacted.
-    fn redact_field(
-        &mut self,
-        field: &<Self::Signal as Signal>::FieldSelector,
-        replacement: &str,
-    ) -> bool;
+    /// Delete `field`. Returns `true` if the field existed and was deleted,
+    /// `false` if it was absent.
+    fn delete_field(&mut self, field: &<Self::Signal as Signal>::FieldSelector) -> bool;
 
-    /// Rename a field by moving it from one location to another.
+    /// Move the value of `from` to the selector `to`.
     ///
-    /// The `to` parameter is the new attribute key name. For simple fields,
-    /// this moves the value to an attribute with the given name.
+    /// The engine constructs `to` via [`Signal::rename_target`], which
+    /// preserves the source's attribute namespace — so a
+    /// `ResourceAttribute → "foo"` rename arrives as `ResourceAttribute["foo"]`,
+    /// keeping the move within the same namespace.
     ///
-    /// If `upsert` is false and the target already exists, do nothing and return false.
-    /// Returns `true` if the rename was performed.
-    fn rename_field(
+    /// The engine guarantees:
+    /// - `from` exists at the time of the call (checked via
+    ///   [`Matchable::field_exists`]).
+    /// - Upsert preconditions on `to` have been validated.
+    ///
+    /// Implementors should therefore unconditionally perform the move and
+    /// must not re-check existence or upsert semantics. The move should
+    /// preserve the underlying value type (e.g. for OTel records, the
+    /// non-string value variants should be copied as-is rather than
+    /// stringified).
+    fn move_field(
         &mut self,
         from: &<Self::Signal as Signal>::FieldSelector,
-        to: &str,
-        upsert: bool,
-    ) -> bool;
-
-    /// Add a new field with the given value.
-    ///
-    /// If `upsert` is false and the field already exists, do nothing and return false.
-    /// Returns `true` if the field was added or updated.
-    fn add_field(
-        &mut self,
-        field: &<Self::Signal as Signal>::FieldSelector,
-        value: &str,
-        upsert: bool,
-    ) -> bool;
+        to: &<Self::Signal as Signal>::FieldSelector,
+    );
 }
 
 #[cfg(test)]
@@ -93,19 +87,47 @@ mod tests {
     impl Matchable for TestLog {
         type Signal = LogSignal;
 
-        fn get_field(&self, _field: &LogFieldSelector) -> Option<Cow<'_, str>> {
-            None // Not used by transformable tests
+        fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
+            match field {
+                LogFieldSelector::Simple(LogField::Body) => {
+                    self.body.as_deref().map(Cow::Borrowed)
+                }
+                LogFieldSelector::Simple(LogField::SeverityText) => {
+                    self.severity.as_deref().map(Cow::Borrowed)
+                }
+                LogFieldSelector::LogAttribute(path) => path
+                    .first()
+                    .and_then(|key| self.attributes.get(key))
+                    .map(|s| Cow::Borrowed(s.as_str())),
+                _ => None,
+            }
         }
     }
 
     impl Transformable for TestLog {
-        fn remove_field(&mut self, field: &LogFieldSelector) -> bool {
+        fn set_field(&mut self, field: &LogFieldSelector, value: &str) {
             match field {
-                LogFieldSelector::Simple(log_field) => match log_field {
-                    LogField::Body => self.body.take().is_some(),
-                    LogField::SeverityText => self.severity.take().is_some(),
-                    _ => false,
-                },
+                LogFieldSelector::Simple(LogField::Body) => {
+                    self.body = Some(value.to_string());
+                }
+                LogFieldSelector::Simple(LogField::SeverityText) => {
+                    self.severity = Some(value.to_string());
+                }
+                LogFieldSelector::LogAttribute(path) => {
+                    if let Some(key) = path.first() {
+                        self.attributes.insert(key.clone(), value.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn delete_field(&mut self, field: &LogFieldSelector) -> bool {
+            match field {
+                LogFieldSelector::Simple(LogField::Body) => self.body.take().is_some(),
+                LogFieldSelector::Simple(LogField::SeverityText) => {
+                    self.severity.take().is_some()
+                }
                 LogFieldSelector::LogAttribute(path) => path
                     .first()
                     .and_then(|key| self.attributes.remove(key))
@@ -114,238 +136,63 @@ mod tests {
             }
         }
 
-        fn redact_field(&mut self, field: &LogFieldSelector, replacement: &str) -> bool {
-            match field {
-                LogFieldSelector::Simple(log_field) => match log_field {
-                    LogField::Body => {
-                        if self.body.is_some() {
-                            self.body = Some(replacement.to_string());
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    LogField::SeverityText => {
-                        if self.severity.is_some() {
-                            self.severity = Some(replacement.to_string());
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    _ => false,
-                },
-                LogFieldSelector::LogAttribute(path) => {
-                    let Some(key) = path.first() else {
-                        return false;
-                    };
-                    if self.attributes.contains_key(key) {
-                        self.attributes.insert(key.clone(), replacement.to_string());
-                        true
-                    } else {
-                        false
-                    }
-                }
-                _ => false,
-            }
-        }
-
-        fn rename_field(&mut self, from: &LogFieldSelector, to: &str, upsert: bool) -> bool {
-            if !upsert && self.attributes.contains_key(to) {
-                return false;
-            }
-
+        fn move_field(&mut self, from: &LogFieldSelector, to: &LogFieldSelector) {
             let value = match from {
-                LogFieldSelector::Simple(log_field) => match log_field {
-                    LogField::Body => self.body.take(),
-                    LogField::SeverityText => self.severity.take(),
-                    _ => None,
-                },
+                LogFieldSelector::Simple(LogField::Body) => self.body.take(),
+                LogFieldSelector::Simple(LogField::SeverityText) => self.severity.take(),
                 LogFieldSelector::LogAttribute(path) => {
                     path.first().and_then(|key| self.attributes.remove(key))
                 }
                 _ => None,
             };
-
-            if let Some(v) = value {
-                self.attributes.insert(to.to_string(), v);
-                true
-            } else {
-                false
-            }
-        }
-
-        fn add_field(&mut self, field: &LogFieldSelector, value: &str, upsert: bool) -> bool {
-            match field {
-                LogFieldSelector::Simple(log_field) => match log_field {
-                    LogField::Body => {
-                        if !upsert && self.body.is_some() {
-                            return false;
-                        }
-                        self.body = Some(value.to_string());
-                        true
-                    }
-                    LogField::SeverityText => {
-                        if !upsert && self.severity.is_some() {
-                            return false;
-                        }
-                        self.severity = Some(value.to_string());
-                        true
-                    }
-                    _ => false,
-                },
-                LogFieldSelector::LogAttribute(path) => {
-                    let Some(key) = path.first() else {
-                        return false;
-                    };
-                    if !upsert && self.attributes.contains_key(key) {
-                        return false;
-                    }
-                    self.attributes.insert(key.clone(), value.to_string());
-                    true
-                }
-                _ => false,
+            let target_key = match to {
+                LogFieldSelector::LogAttribute(path) => path.first().cloned(),
+                _ => None,
+            };
+            if let (Some(v), Some(k)) = (value, target_key) {
+                self.attributes.insert(k, v);
             }
         }
     }
 
     #[test]
-    fn remove_existing_field() {
-        let mut log = TestLog::new().with_body("test");
-        assert!(log.remove_field(&LogFieldSelector::Simple(LogField::Body)));
-        assert!(log.body.is_none());
-    }
-
-    #[test]
-    fn remove_nonexistent_field() {
-        let mut log = TestLog::new();
-        assert!(!log.remove_field(&LogFieldSelector::Simple(LogField::Body)));
-    }
-
-    #[test]
-    fn remove_attribute() {
-        let mut log = TestLog::new().with_attr("key", "value");
-        assert!(log.remove_field(&LogFieldSelector::LogAttribute(vec!["key".to_string()])));
-        assert!(!log.attributes.contains_key("key"));
-    }
-
-    #[test]
-    fn redact_existing_field() {
-        let mut log = TestLog::new().with_body("secret data");
-        assert!(log.redact_field(&LogFieldSelector::Simple(LogField::Body), "[REDACTED]"));
-        assert_eq!(log.body, Some("[REDACTED]".to_string()));
-    }
-
-    #[test]
-    fn redact_nonexistent_field() {
-        let mut log = TestLog::new();
-        assert!(!log.redact_field(&LogFieldSelector::Simple(LogField::Body), "[REDACTED]"));
-    }
-
-    #[test]
-    fn rename_field_to_attribute() {
+    fn set_simple_field_overwrites() {
         let mut log = TestLog::new().with_body("original");
-        assert!(log.rename_field(
-            &LogFieldSelector::Simple(LogField::Body),
-            "body_backup",
-            false
-        ));
+        log.set_field(&LogFieldSelector::Simple(LogField::Body), "replaced");
+        assert_eq!(log.body, Some("replaced".to_string()));
+    }
+
+    #[test]
+    fn set_attribute_creates_when_absent() {
+        let mut log = TestLog::new();
+        log.set_field(
+            &LogFieldSelector::LogAttribute(vec!["new".to_string()]),
+            "value",
+        );
+        assert_eq!(log.attributes.get("new"), Some(&"value".to_string()));
+    }
+
+    #[test]
+    fn delete_returns_true_when_present() {
+        let mut log = TestLog::new().with_body("x");
+        assert!(log.delete_field(&LogFieldSelector::Simple(LogField::Body)));
         assert!(log.body.is_none());
-        assert_eq!(
-            log.attributes.get("body_backup"),
-            Some(&"original".to_string())
-        );
     }
 
     #[test]
-    fn rename_attribute() {
-        let mut log = TestLog::new().with_attr("old_key", "value");
-        assert!(log.rename_field(
-            &LogFieldSelector::LogAttribute(vec!["old_key".to_string()]),
-            "new_key",
-            false
-        ));
-        assert!(!log.attributes.contains_key("old_key"));
-        assert_eq!(log.attributes.get("new_key"), Some(&"value".to_string()));
-    }
-
-    #[test]
-    fn rename_no_upsert_target_exists() {
-        let mut log = TestLog::new()
-            .with_attr("source", "source_value")
-            .with_attr("target", "target_value");
-        assert!(!log.rename_field(
-            &LogFieldSelector::LogAttribute(vec!["source".to_string()]),
-            "target",
-            false
-        ));
-        assert_eq!(
-            log.attributes.get("source"),
-            Some(&"source_value".to_string())
-        );
-        assert_eq!(
-            log.attributes.get("target"),
-            Some(&"target_value".to_string())
-        );
-    }
-
-    #[test]
-    fn rename_upsert_overwrites() {
-        let mut log = TestLog::new()
-            .with_attr("source", "source_value")
-            .with_attr("target", "target_value");
-        assert!(log.rename_field(
-            &LogFieldSelector::LogAttribute(vec!["source".to_string()]),
-            "target",
-            true
-        ));
-        assert!(!log.attributes.contains_key("source"));
-        assert_eq!(
-            log.attributes.get("target"),
-            Some(&"source_value".to_string())
-        );
-    }
-
-    #[test]
-    fn add_new_field() {
+    fn delete_returns_false_when_absent() {
         let mut log = TestLog::new();
-        assert!(log.add_field(
-            &LogFieldSelector::LogAttribute(vec!["new_key".to_string()]),
-            "new_value",
-            false
-        ));
-        assert_eq!(
-            log.attributes.get("new_key"),
-            Some(&"new_value".to_string())
+        assert!(!log.delete_field(&LogFieldSelector::Simple(LogField::Body)));
+    }
+
+    #[test]
+    fn move_field_relocates_value() {
+        let mut log = TestLog::new().with_attr("old", "value");
+        log.move_field(
+            &LogFieldSelector::LogAttribute(vec!["old".to_string()]),
+            &LogFieldSelector::LogAttribute(vec!["new".to_string()]),
         );
-    }
-
-    #[test]
-    fn add_no_upsert_exists() {
-        let mut log = TestLog::new().with_attr("key", "original");
-        assert!(!log.add_field(
-            &LogFieldSelector::LogAttribute(vec!["key".to_string()]),
-            "new_value",
-            false
-        ));
-        assert_eq!(log.attributes.get("key"), Some(&"original".to_string()));
-    }
-
-    #[test]
-    fn add_upsert_overwrites() {
-        let mut log = TestLog::new().with_attr("key", "original");
-        assert!(log.add_field(
-            &LogFieldSelector::LogAttribute(vec!["key".to_string()]),
-            "new_value",
-            true
-        ));
-        assert_eq!(log.attributes.get("key"), Some(&"new_value".to_string()));
-    }
-
-    #[test]
-    fn add_simple_field() {
-        let mut log = TestLog::new();
-        assert!(log.add_field(&LogFieldSelector::Simple(LogField::Body), "new body", false));
-        assert_eq!(log.body, Some("new body".to_string()));
+        assert!(!log.attributes.contains_key("old"));
+        assert_eq!(log.attributes.get("new"), Some(&"value".to_string()));
     }
 }

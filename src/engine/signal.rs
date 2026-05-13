@@ -24,6 +24,19 @@ pub trait Signal: 'static {
     fn compiled_matchers(snapshot: &PolicySnapshot) -> Option<&CompiledMatchers<Self>>
     where
         Self: Sized;
+
+    /// Construct the rename target selector for moving `from` to `to_key`.
+    ///
+    /// The returned selector preserves the source's attribute namespace
+    /// (log/resource/scope → the same namespace at `to_key`). Returns `None`
+    /// when the source is a simple field selector — renaming simple fields is
+    /// not expressed by the proto and is a no-op in all reference
+    /// implementations.
+    ///
+    /// Used by the engine to evaluate rename-target upsert preconditions and
+    /// to dispatch `Transformable::move_field` with a fully-formed target
+    /// selector.
+    fn rename_target(from: &Self::FieldSelector, to_key: &str) -> Option<Self::FieldSelector>;
 }
 
 /// Log telemetry signal.
@@ -35,6 +48,18 @@ impl Signal for LogSignal {
 
     fn compiled_matchers(snapshot: &PolicySnapshot) -> Option<&CompiledMatchers<Self>> {
         snapshot.compiled_log_matchers()
+    }
+
+    fn rename_target(from: &Self::FieldSelector, to_key: &str) -> Option<Self::FieldSelector> {
+        let path = vec![to_key.to_string()];
+        match from {
+            LogFieldSelector::LogAttribute(_) => Some(LogFieldSelector::LogAttribute(path)),
+            LogFieldSelector::ResourceAttribute(_) => {
+                Some(LogFieldSelector::ResourceAttribute(path))
+            }
+            LogFieldSelector::ScopeAttribute(_) => Some(LogFieldSelector::ScopeAttribute(path)),
+            LogFieldSelector::Simple(_) => None,
+        }
     }
 }
 
@@ -48,6 +73,22 @@ impl Signal for MetricSignal {
     fn compiled_matchers(snapshot: &PolicySnapshot) -> Option<&CompiledMatchers<Self>> {
         snapshot.compiled_metric_matchers()
     }
+
+    fn rename_target(from: &Self::FieldSelector, to_key: &str) -> Option<Self::FieldSelector> {
+        let path = vec![to_key.to_string()];
+        match from {
+            MetricFieldSelector::DatapointAttribute(_) => {
+                Some(MetricFieldSelector::DatapointAttribute(path))
+            }
+            MetricFieldSelector::ResourceAttribute(_) => {
+                Some(MetricFieldSelector::ResourceAttribute(path))
+            }
+            MetricFieldSelector::ScopeAttribute(_) => {
+                Some(MetricFieldSelector::ScopeAttribute(path))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Trace telemetry signal.
@@ -59,5 +100,19 @@ impl Signal for TraceSignal {
 
     fn compiled_matchers(snapshot: &PolicySnapshot) -> Option<&CompiledMatchers<Self>> {
         snapshot.compiled_trace_matchers()
+    }
+
+    fn rename_target(from: &Self::FieldSelector, to_key: &str) -> Option<Self::FieldSelector> {
+        let path = vec![to_key.to_string()];
+        match from {
+            TraceFieldSelector::SpanAttribute(_) => Some(TraceFieldSelector::SpanAttribute(path)),
+            TraceFieldSelector::ResourceAttribute(_) => {
+                Some(TraceFieldSelector::ResourceAttribute(path))
+            }
+            TraceFieldSelector::ScopeAttribute(_) => {
+                Some(TraceFieldSelector::ScopeAttribute(path))
+            }
+            _ => None,
+        }
     }
 }

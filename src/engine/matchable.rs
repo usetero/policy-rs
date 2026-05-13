@@ -6,9 +6,18 @@ use super::signal::Signal;
 
 /// Trait for types that can be matched against policies.
 ///
-/// Implementors provide field access for telemetry records by implementing
-/// the single `get_field` method. This enables the policy engine to
-/// extract field values for pattern matching.
+/// Implementors provide field access for telemetry records. The engine uses
+/// two primitives:
+///
+/// - [`get_field`](Matchable::get_field) returns the field's value for pattern
+///   matching, or `None` when the field is absent **or** present but not
+///   representable as a string.
+/// - [`field_exists`](Matchable::field_exists) reports whether the field is
+///   present, regardless of whether its value can be expressed as a string. The
+///   default body answers "present" as `get_field(...).is_some()`, which is
+///   correct only when every present value is a string. Records that carry
+///   non-string values (e.g. `intValue: 42`) must override `field_exists` so
+///   that `exists: true` matchers fire correctly.
 ///
 /// The associated `Signal` type determines which field selector is used,
 /// binding this implementation to a specific telemetry signal (logs, metrics, etc.).
@@ -27,7 +36,8 @@ use super::signal::Signal;
 /// 2. **Flat Attributes**: For single-segment paths, use the first element as the key
 /// 3. **Nested Attributes**: For multi-segment paths, traverse the nested structure
 /// 4. **Missing Fields**: Return `None` if the field or any intermediate path doesn't exist
-/// 5. **Non-String Values**: Convert values to strings or return `None`
+/// 5. **Non-String Values**: Return `None` from `get_field` (the value can't drive a string
+///    match) and override `field_exists` so `exists: true` still reports the field as present.
 ///
 /// # Example Implementation
 ///
@@ -47,6 +57,17 @@ use super::signal::Signal;
 ///             _ => None,
 ///         }
 ///     }
+///
+///     // Optional: override only when records carry non-string values.
+///     fn field_exists(&self, field: &LogFieldSelector) -> bool {
+///         match field {
+///             LogFieldSelector::LogAttribute(path) => path
+///                 .first()
+///                 .map(|key| self.log_attributes.contains_key(key))
+///                 .unwrap_or(false),
+///             _ => self.get_field(field).is_some(),
+///         }
+///     }
 /// }
 /// ```
 pub trait Matchable {
@@ -55,13 +76,24 @@ pub trait Matchable {
 
     /// Get a field value by selector.
     ///
-    /// Returns `None` for fields that don't exist or aren't applicable.
-    /// Returns `Cow::Borrowed` for fields that exist as stored strings,
-    /// or `Cow::Owned` for computed/converted fields.
+    /// Returns `None` when the field doesn't exist or isn't representable as
+    /// a string. Returns `Cow::Borrowed` for fields stored as strings, or
+    /// `Cow::Owned` for computed/converted fields.
     ///
     /// For attribute selectors with multi-segment paths, traverse the nested
     /// structure and return the leaf value as a string.
     fn get_field(&self, field: &<Self::Signal as Signal>::FieldSelector) -> Option<Cow<'_, str>>;
+
+    /// Report whether the field is present, regardless of whether its value
+    /// can be represented as a string.
+    ///
+    /// The default returns `self.get_field(field).is_some()`, which conflates
+    /// "absent" with "present but non-string." Override this method when your
+    /// records carry non-string values (numbers, booleans, structured values)
+    /// that should still satisfy `exists: true` matchers.
+    fn field_exists(&self, field: &<Self::Signal as Signal>::FieldSelector) -> bool {
+        self.get_field(field).is_some()
+    }
 }
 
 #[cfg(test)]

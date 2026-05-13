@@ -65,7 +65,15 @@ impl Matchable for BenchLog {
 }
 
 impl Transformable for BenchLog {
-    fn remove_field(&mut self, field: &LogFieldSelector) -> bool {
+    fn set_field(&mut self, field: &LogFieldSelector, value: &str) {
+        if let LogFieldSelector::LogAttribute(path) = field
+            && let Some(key) = path.first()
+        {
+            self.attributes.insert(key.clone(), value.to_string());
+        }
+    }
+
+    fn delete_field(&mut self, field: &LogFieldSelector) -> bool {
         match field {
             LogFieldSelector::LogAttribute(path) => path
                 .first()
@@ -75,50 +83,14 @@ impl Transformable for BenchLog {
         }
     }
 
-    fn redact_field(&mut self, field: &LogFieldSelector, replacement: &str) -> bool {
-        match field {
-            LogFieldSelector::LogAttribute(path) => {
-                let Some(key) = path.first() else {
-                    return false;
-                };
-                if self.attributes.contains_key(key) {
-                    self.attributes.insert(key.clone(), replacement.to_string());
-                    true
-                } else {
-                    false
-                }
-            }
-            _ => false,
-        }
-    }
-
-    fn rename_field(&mut self, from: &LogFieldSelector, to: &str, upsert: bool) -> bool {
-        if !upsert && self.attributes.contains_key(to) {
-            return false;
-        }
+    fn move_field(&mut self, from: &LogFieldSelector, to: &LogFieldSelector) {
         if let LogFieldSelector::LogAttribute(path) = from
             && let Some(key) = path.first()
             && let Some(value) = self.attributes.remove(key)
+            && let LogFieldSelector::LogAttribute(to_path) = to
+            && let Some(to_key) = to_path.first()
         {
-            self.attributes.insert(to.to_string(), value);
-            return true;
-        }
-        false
-    }
-
-    fn add_field(&mut self, field: &LogFieldSelector, value: &str, upsert: bool) -> bool {
-        match field {
-            LogFieldSelector::LogAttribute(path) => {
-                let Some(key) = path.first() else {
-                    return false;
-                };
-                if !upsert && self.attributes.contains_key(key) {
-                    return false;
-                }
-                self.attributes.insert(key.clone(), value.to_string());
-                true
-            }
-            _ => false,
+            self.attributes.insert(to_key.clone(), value);
         }
     }
 }
@@ -421,6 +393,7 @@ fn bench_transform_operations(c: &mut Criterion) {
                 redact: vec![LogRedact {
                     field: Some(log_redact::Field::LogAttribute(attr_path("secret"))),
                     replacement: "[REDACTED]".to_string(),
+                    regex: None,
                 }],
                 ..Default::default()
             },
@@ -508,6 +481,7 @@ fn bench_transform_combined(c: &mut Criterion) {
                         i
                     )))),
                     replacement: "[REDACTED]".to_string(),
+                    regex: None,
                 }),
                 2 => transform.rename.push(LogRename {
                     from: Some(log_rename::From::FromLogAttribute(attr_path(&format!(
@@ -589,6 +563,7 @@ fn bench_transform_multiple_policies(c: &mut Criterion) {
                             i
                         )))),
                         replacement: "[REDACTED]".to_string(),
+                        regex: None,
                     }],
                     add: vec![LogAdd {
                         field: Some(log_add::Field::LogAttribute(attr_path(&format!(
@@ -650,6 +625,7 @@ fn bench_transform_overhead(c: &mut Criterion) {
         redact: vec![LogRedact {
             field: Some(log_redact::Field::LogAttribute(attr_path("password"))),
             replacement: "[REDACTED]".to_string(),
+            regex: None,
         }],
         add: vec![LogAdd {
             field: Some(log_add::Field::LogAttribute(attr_path("sanitized"))),
@@ -707,10 +683,12 @@ fn bench_transform_throughput(c: &mut Criterion) {
             LogRedact {
                 field: Some(log_redact::Field::LogAttribute(attr_path("password"))),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             },
             LogRedact {
                 field: Some(log_redact::Field::LogAttribute(attr_path("api_key"))),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             },
         ],
         remove: vec![LogRemove {
@@ -1096,25 +1074,17 @@ impl Matchable for BenchSpan {
 }
 
 impl Transformable for BenchSpan {
-    fn remove_field(&mut self, _field: &TraceFieldSelector) -> bool {
-        false
-    }
-
-    fn redact_field(&mut self, _field: &TraceFieldSelector, _replacement: &str) -> bool {
-        false
-    }
-
-    fn rename_field(&mut self, _from: &TraceFieldSelector, _to: &str, _upsert: bool) -> bool {
-        false
-    }
-
-    fn add_field(&mut self, field: &TraceFieldSelector, value: &str, _upsert: bool) -> bool {
+    fn set_field(&mut self, field: &TraceFieldSelector, value: &str) {
         if matches!(field, TraceFieldSelector::SamplingThreshold) {
             self.th_value = Some(value.to_string());
-            return true;
         }
+    }
+
+    fn delete_field(&mut self, _field: &TraceFieldSelector) -> bool {
         false
     }
+
+    fn move_field(&mut self, _from: &TraceFieldSelector, _to: &TraceFieldSelector) {}
 }
 
 fn create_trace_policy(id: &str, field: trace_matcher::Field, percentage: f32) -> Policy {

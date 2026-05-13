@@ -123,11 +123,14 @@ support, also implement `Transformable`.
 
 ### Matchable Trait
 
-The `Matchable` trait provides zero-allocation field access for pattern
-matching:
+The `Matchable` trait provides field access for pattern matching with two
+primitives: `get_field` returns the field's string value (for regex / equals /
+contains matchers), and `field_exists` reports presence regardless of value
+type (for `exists: true` matchers).
 
 ```rust
-use policy_rs::{Matchable, LogFieldSelector};
+use std::borrow::Cow;
+use policy_rs::{LogFieldSelector, LogSignal, Matchable};
 use policy_rs::proto::tero::policy::v1::LogField;
 
 struct MyLogRecord {
@@ -137,18 +140,38 @@ struct MyLogRecord {
 }
 
 impl Matchable for MyLogRecord {
-    fn get_field(&self, field: &LogFieldSelector) -> Option<&str> {
+    type Signal = LogSignal;
+
+    fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
         match field {
-            LogFieldSelector::Simple(log_field) => match log_field {
-                LogField::Body => Some(&self.body),
-                LogField::SeverityText => Some(&self.severity),
-                _ => None,
-            },
-            LogFieldSelector::LogAttribute(key) => {
-                self.attributes.get(key).map(|s| s.as_str())
-            },
-            LogFieldSelector::ResourceAttribute(key) => None,
-            LogFieldSelector::ScopeAttribute(key) => None,
+            LogFieldSelector::Simple(LogField::Body) => Some(Cow::Borrowed(&self.body)),
+            LogFieldSelector::Simple(LogField::SeverityText) => Some(Cow::Borrowed(&self.severity)),
+            LogFieldSelector::LogAttribute(path) => path
+                .first()
+                .and_then(|key| self.attributes.get(key))
+                .map(|s| Cow::Borrowed(s.as_str())),
+            _ => None,
+        }
+    }
+}
+```
+
+The default `field_exists` is `self.get_field(field).is_some()`, which is
+correct as long as every present value is a string. If your records carry
+non-string values (numbers, booleans, structured values), override
+`field_exists` so `exists: true` matchers report presence correctly:
+
+```rust
+impl Matchable for MyLogRecord {
+    // ... get_field as above ...
+
+    fn field_exists(&self, field: &LogFieldSelector) -> bool {
+        match field {
+            LogFieldSelector::LogAttribute(path) => path
+                .first()
+                .map(|key| self.attributes.contains_key(key))
+                .unwrap_or(false),
+            _ => self.get_field(field).is_some(),
         }
     }
 }
@@ -156,63 +179,65 @@ impl Matchable for MyLogRecord {
 
 ### Transformable Trait
 
-The `Transformable` trait enables field mutations when using
-`evaluate_and_transform`:
+The `Transformable` trait exposes three minimal write primitives —
+`set_field`, `delete_field`, and `move_field`. The engine composes these with
+the read side of `Matchable` to drive higher-level transform ops (regex
+redact, upsert add, rename-with-upsert), so consumers don't have to express
+upsert checks or regex matching themselves.
 
 ```rust
-use policy_rs::{Transformable, LogFieldSelector};
+use policy_rs::{LogFieldSelector, Transformable};
+use policy_rs::proto::tero::policy::v1::LogField;
 
 impl Transformable for MyLogRecord {
-    fn remove_field(&mut self, field: &LogFieldSelector) -> bool {
+    fn set_field(&mut self, field: &LogFieldSelector, value: &str) {
         match field {
-            LogFieldSelector::LogAttribute(key) => {
-                self.attributes.remove(key).is_some()
-            },
-            _ => false,
-        }
-    }
-
-    fn redact_field(&mut self, field: &LogFieldSelector, replacement: &str) -> bool {
-        match field {
-            LogFieldSelector::LogAttribute(key) => {
-                if self.attributes.contains_key(key) {
-                    self.attributes.insert(key.clone(), replacement.to_string());
-                    true
-                } else {
-                    false
-                }
-            },
-            _ => false,
-        }
-    }
-
-    fn rename_field(&mut self, from: &LogFieldSelector, to: &str, upsert: bool) -> bool {
-        if let LogFieldSelector::LogAttribute(key) = from {
-            if let Some(value) = self.attributes.remove(key) {
-                if upsert || !self.attributes.contains_key(to) {
-                    self.attributes.insert(to.to_string(), value);
-                    return true;
+            LogFieldSelector::Simple(LogField::Body) => {
+                self.body = value.to_string();
+            }
+            LogFieldSelector::Simple(LogField::SeverityText) => {
+                self.severity = value.to_string();
+            }
+            LogFieldSelector::LogAttribute(path) => {
+                if let Some(key) = path.first() {
+                    self.attributes.insert(key.clone(), value.to_string());
                 }
             }
+            _ => {}
         }
-        false
     }
 
-    fn add_field(&mut self, field: &LogFieldSelector, value: &str, upsert: bool) -> bool {
+    fn delete_field(&mut self, field: &LogFieldSelector) -> bool {
         match field {
-            LogFieldSelector::LogAttribute(key) => {
-                if upsert || !self.attributes.contains_key(key) {
-                    self.attributes.insert(key.clone(), value.to_string());
-                    true
-                } else {
-                    false
-                }
-            },
+            LogFieldSelector::LogAttribute(path) => path
+                .first()
+                .and_then(|key| self.attributes.remove(key))
+                .is_some(),
             _ => false,
+        }
+    }
+
+    fn move_field(&mut self, from: &LogFieldSelector, to: &LogFieldSelector) {
+        let value = match from {
+            LogFieldSelector::LogAttribute(path) => {
+                path.first().and_then(|key| self.attributes.remove(key))
+            }
+            _ => None,
+        };
+        let Some(v) = value else { return };
+        if let LogFieldSelector::LogAttribute(path) = to
+            && let Some(key) = path.first()
+        {
+            self.attributes.insert(key.clone(), v);
         }
     }
 }
 ```
+
+The engine constructs `to` so its variant matches the source's attribute
+namespace — e.g. renaming a `ResourceAttribute` produces a target selector
+of `ResourceAttribute`. Implementors should dispatch on `to`'s variant
+rather than assuming a primary namespace.
 
 ## Advanced Usage
 

@@ -65,7 +65,29 @@ impl Matchable for LogRecord {
 }
 
 impl Transformable for LogRecord {
-    fn remove_field(&mut self, field: &LogFieldSelector) -> bool {
+    fn set_field(&mut self, field: &LogFieldSelector, value: &str) {
+        match field {
+            LogFieldSelector::Simple(log_field) => match log_field {
+                LogField::Body => self.body = Some(value.to_string()),
+                LogField::SeverityText => self.severity = Some(value.to_string()),
+                _ => {}
+            },
+            LogFieldSelector::LogAttribute(path) => {
+                if let Some(key) = path.first() {
+                    self.attributes.insert(key.clone(), value.to_string());
+                }
+            }
+            LogFieldSelector::ResourceAttribute(path) => {
+                if let Some(key) = path.first() {
+                    self.resource_attributes
+                        .insert(key.clone(), value.to_string());
+                }
+            }
+            LogFieldSelector::ScopeAttribute(_) => {}
+        }
+    }
+
+    fn delete_field(&mut self, field: &LogFieldSelector) -> bool {
         match field {
             LogFieldSelector::Simple(log_field) => match log_field {
                 LogField::Body => self.body.take().is_some(),
@@ -84,54 +106,7 @@ impl Transformable for LogRecord {
         }
     }
 
-    fn redact_field(&mut self, field: &LogFieldSelector, replacement: &str) -> bool {
-        match field {
-            LogFieldSelector::Simple(log_field) => match log_field {
-                LogField::Body => {
-                    if self.body.is_some() {
-                        self.body = Some(replacement.to_string());
-                        true
-                    } else {
-                        false
-                    }
-                }
-                LogField::SeverityText => {
-                    if self.severity.is_some() {
-                        self.severity = Some(replacement.to_string());
-                        true
-                    } else {
-                        false
-                    }
-                }
-                _ => false,
-            },
-            LogFieldSelector::LogAttribute(path) => {
-                if let Some(key) = path.first()
-                    && self.attributes.contains_key(key)
-                {
-                    self.attributes.insert(key.clone(), replacement.to_string());
-                    return true;
-                }
-                false
-            }
-            LogFieldSelector::ResourceAttribute(path) => {
-                if let Some(key) = path.first()
-                    && self.resource_attributes.contains_key(key)
-                {
-                    self.resource_attributes
-                        .insert(key.clone(), replacement.to_string());
-                    return true;
-                }
-                false
-            }
-            LogFieldSelector::ScopeAttribute(_) => false,
-        }
-    }
-
-    fn rename_field(&mut self, from: &LogFieldSelector, to: &str, upsert: bool) -> bool {
-        if !upsert && self.attributes.contains_key(to) {
-            return false;
-        }
+    fn move_field(&mut self, from: &LogFieldSelector, to: &LogFieldSelector) {
         let value = match from {
             LogFieldSelector::Simple(log_field) => match log_field {
                 LogField::Body => self.body.take(),
@@ -146,55 +121,21 @@ impl Transformable for LogRecord {
                 .and_then(|key| self.resource_attributes.remove(key)),
             LogFieldSelector::ScopeAttribute(_) => None,
         };
-        if let Some(v) = value {
-            self.attributes.insert(to.to_string(), v);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn add_field(&mut self, field: &LogFieldSelector, value: &str, upsert: bool) -> bool {
-        match field {
-            LogFieldSelector::Simple(log_field) => match log_field {
-                LogField::Body => {
-                    if !upsert && self.body.is_some() {
-                        return false;
-                    }
-                    self.body = Some(value.to_string());
-                    true
-                }
-                LogField::SeverityText => {
-                    if !upsert && self.severity.is_some() {
-                        return false;
-                    }
-                    self.severity = Some(value.to_string());
-                    true
-                }
-                _ => false,
-            },
+        let Some(v) = value else {
+            return;
+        };
+        match to {
             LogFieldSelector::LogAttribute(path) => {
                 if let Some(key) = path.first() {
-                    if !upsert && self.attributes.contains_key(key) {
-                        return false;
-                    }
-                    self.attributes.insert(key.clone(), value.to_string());
-                    return true;
+                    self.attributes.insert(key.clone(), v);
                 }
-                false
             }
             LogFieldSelector::ResourceAttribute(path) => {
                 if let Some(key) = path.first() {
-                    if !upsert && self.resource_attributes.contains_key(key) {
-                        return false;
-                    }
-                    self.resource_attributes
-                        .insert(key.clone(), value.to_string());
-                    return true;
+                    self.resource_attributes.insert(key.clone(), v);
                 }
-                false
             }
-            LogFieldSelector::ScopeAttribute(_) => false,
+            _ => {}
         }
     }
 }
@@ -368,25 +309,17 @@ impl Matchable for SpanRecord {
 }
 
 impl Transformable for SpanRecord {
-    fn remove_field(&mut self, _field: &TraceFieldSelector) -> bool {
-        false
-    }
-
-    fn redact_field(&mut self, _field: &TraceFieldSelector, _replacement: &str) -> bool {
-        false
-    }
-
-    fn rename_field(&mut self, _from: &TraceFieldSelector, _to: &str, _upsert: bool) -> bool {
-        false
-    }
-
-    fn add_field(&mut self, field: &TraceFieldSelector, value: &str, _upsert: bool) -> bool {
+    fn set_field(&mut self, field: &TraceFieldSelector, value: &str) {
         if matches!(field, TraceFieldSelector::SamplingThreshold) {
             self.th_value = Some(value.to_string());
-            return true;
         }
+    }
+
+    fn delete_field(&mut self, _field: &TraceFieldSelector) -> bool {
         false
     }
+
+    fn move_field(&mut self, _from: &TraceFieldSelector, _to: &TraceFieldSelector) {}
 }
 
 /// Helper to print a span record's current state.
