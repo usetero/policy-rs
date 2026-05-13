@@ -24,6 +24,7 @@ vectorscan-rs-sys = "0.0.5"
 prost = "0.13"
 fnv = "1"
 rand = "0.8"
+regex = "1"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], optional = true, default-features = false }
 notify = "7"
 serde = { version = "1", features = ["derive"] }

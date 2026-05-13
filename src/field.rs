@@ -150,7 +150,7 @@ pub enum TraceFieldSelector {
     /// Link trace ID — synthesized exact match on link_trace_id string value
     LinkTraceId,
     /// Sampling threshold — write-only field used by the engine to write the
-    /// OTel `th` value to the span's tracestate via `Transformable::add_field`.
+    /// OTel `th` value to the span's tracestate via `Transformable::set_field`.
     SamplingThreshold,
 }
 

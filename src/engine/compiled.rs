@@ -355,12 +355,20 @@ impl PatternGroups<LogSignal> {
                 None => continue,
             };
 
+            if log_target.r#match.is_empty() {
+                return Err(PolicyError::InvalidPolicy {
+                    policy_id: policy.id().to_string(),
+                    reason: "log target must have at least one matcher".to_string(),
+                });
+            }
+
             let required_match_count = log_target.r#match.iter().filter(|m| !m.negate).count();
 
             let transform = log_target
                 .transform
                 .as_ref()
-                .map(CompiledTransform::from_proto)
+                .map(|t| CompiledTransform::from_proto(t, policy.id()))
+                .transpose()?
                 .filter(|t| !t.is_empty());
 
             let sample_key = log_target
@@ -412,6 +420,13 @@ impl PatternGroups<MetricSignal> {
                 Some(t) => t,
                 None => continue,
             };
+
+            if metric_target.r#match.is_empty() {
+                return Err(PolicyError::InvalidPolicy {
+                    policy_id: policy.id().to_string(),
+                    reason: "metric target must have at least one matcher".to_string(),
+                });
+            }
 
             let required_match_count = metric_target.r#match.iter().filter(|m| !m.negate).count();
 
@@ -472,6 +487,13 @@ impl PatternGroups<TraceSignal> {
                 Some(t) => t,
                 None => continue,
             };
+
+            if trace_target.r#match.is_empty() {
+                return Err(PolicyError::InvalidPolicy {
+                    policy_id: policy.id().to_string(),
+                    reason: "trace target must have at least one matcher".to_string(),
+                });
+            }
 
             let required_match_count = trace_target.r#match.iter().filter(|m| !m.negate).count();
 
@@ -1122,6 +1144,7 @@ mod tests {
             redact: vec![LogRedact {
                 field: Some(log_redact::Field::LogAttribute(attr_path("password"))),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             }],
             add: vec![LogAdd {
                 field: Some(log_add::Field::LogAttribute(attr_path("processed"))),
@@ -1460,5 +1483,84 @@ mod tests {
 
         let matches = db.database.scan(b"config.json.bak").unwrap();
         assert!(matches.is_empty(), "Should NOT match .json in middle");
+    }
+
+    #[test]
+    fn build_from_log_policies_empty_match_list_rejected() {
+        let log_target = LogTarget {
+            r#match: Vec::new(),
+            keep: "all".to_string(),
+            transform: None,
+            sample_key: None,
+        };
+        let proto = ProtoPolicy {
+            id: "no-matchers".to_string(),
+            name: "no-matchers".to_string(),
+            enabled: true,
+            target: Some(crate::proto::tero::policy::v1::policy::Target::Log(
+                log_target,
+            )),
+            ..Default::default()
+        };
+        let policy = Policy::new(proto);
+        let stats = Arc::new(PolicyStats::default());
+        let err =
+            PatternGroups::build_from_log_policies([(policy, stats)].into_iter()).unwrap_err();
+        assert!(matches!(
+            err,
+            PolicyError::InvalidPolicy { ref policy_id, .. } if policy_id == "no-matchers"
+        ));
+    }
+
+    #[test]
+    fn build_from_metric_policies_empty_match_list_rejected() {
+        use crate::proto::tero::policy::v1::MetricTarget;
+        let metric_target = MetricTarget {
+            r#match: Vec::new(),
+            keep: true,
+        };
+        let proto = ProtoPolicy {
+            id: "metric-no-matchers".to_string(),
+            name: "metric-no-matchers".to_string(),
+            enabled: true,
+            target: Some(crate::proto::tero::policy::v1::policy::Target::Metric(
+                metric_target,
+            )),
+            ..Default::default()
+        };
+        let policy = Policy::new(proto);
+        let stats = Arc::new(PolicyStats::default());
+        let err =
+            PatternGroups::build_from_metric_policies([(policy, stats)].into_iter()).unwrap_err();
+        assert!(matches!(
+            err,
+            PolicyError::InvalidPolicy { ref policy_id, .. } if policy_id == "metric-no-matchers"
+        ));
+    }
+
+    #[test]
+    fn build_from_trace_policies_empty_match_list_rejected() {
+        use crate::proto::tero::policy::v1::TraceTarget;
+        let trace_target = TraceTarget {
+            r#match: Vec::new(),
+            keep: None,
+        };
+        let proto = ProtoPolicy {
+            id: "trace-no-matchers".to_string(),
+            name: "trace-no-matchers".to_string(),
+            enabled: true,
+            target: Some(crate::proto::tero::policy::v1::policy::Target::Trace(
+                trace_target,
+            )),
+            ..Default::default()
+        };
+        let policy = Policy::new(proto);
+        let stats = Arc::new(PolicyStats::default());
+        let err =
+            PatternGroups::build_from_trace_policies([(policy, stats)].into_iter()).unwrap_err();
+        assert!(matches!(
+            err,
+            PolicyError::InvalidPolicy { ref policy_id, .. } if policy_id == "trace-no-matchers"
+        ));
     }
 }

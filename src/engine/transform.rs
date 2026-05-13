@@ -1,5 +1,17 @@
 //! Compiled transform structures for efficient application.
+//!
+//! # Operation ordering
+//!
+//! Within a single policy's transform, operations are applied in a fixed,
+//! observable order: **remove → redact → rename → add**. This ordering is
+//! part of the spec — it lets a policy author redact a field's contents,
+//! then rename it, then ensure a sibling field exists, all in a single pass,
+//! without worrying about which step shadows which. The same ordering is
+//! mirrored by every reference implementation (Go, Zig).
 
+use regex::Regex;
+
+use crate::error::PolicyError;
 use crate::field::LogFieldSelector;
 use crate::proto::tero::policy::v1::{
     LogField, LogTransform, log_add, log_redact, log_remove, log_rename,
@@ -15,9 +27,16 @@ pub enum TransformOp<S: Signal> {
     /// Remove a field entirely.
     Remove { field: S::FieldSelector },
     /// Redact a field by replacing its value.
+    ///
+    /// When `regex` is `None`, the entire field value is replaced with
+    /// `replacement`. When `regex` is `Some`, all non-overlapping matches of
+    /// the pattern in the field value are replaced using `replacement` as a
+    /// template (supports `$N`/`${name}` capture references). If no match is
+    /// found, the field is left unchanged.
     Redact {
         field: S::FieldSelector,
         replacement: String,
+        regex: Option<Regex>,
     },
     /// Rename a field to a new attribute key.
     Rename {
@@ -35,7 +54,8 @@ pub enum TransformOp<S: Signal> {
 
 /// Compiled transforms for a single policy.
 ///
-/// Operations are stored in execution order: remove, redact, rename, add.
+/// Operations are stored — and applied — in the spec-defined execution order
+/// (remove, redact, rename, add). See the module-level docs for rationale.
 #[derive(Debug, Clone)]
 pub struct CompiledTransform<S: Signal> {
     /// Operations to apply, in order.
@@ -59,6 +79,11 @@ impl<S: Signal> CompiledTransform<S> {
     /// Apply all operations to a transformable record, recording stats.
     ///
     /// Returns the number of operations that were successfully applied.
+    ///
+    /// The engine drives high-level semantics (regex matching, upsert
+    /// preconditions, source-absent no-ops) by composing the record's three
+    /// [`Transformable`] primitives — `set_field`, `delete_field`,
+    /// `move_field` — with [`Matchable::field_exists`] and `get_field` checks.
     pub fn apply_with_stats<T: Transformable<Signal = S>>(
         &self,
         record: &mut T,
@@ -68,7 +93,7 @@ impl<S: Signal> CompiledTransform<S> {
         for op in &self.ops {
             let success = match op {
                 TransformOp::Remove { field } => {
-                    let result = record.remove_field(field);
+                    let result = record.delete_field(field);
                     if let Some(s) = stats {
                         if result {
                             s.remove.record_hit();
@@ -78,13 +103,41 @@ impl<S: Signal> CompiledTransform<S> {
                     }
                     result
                 }
-                TransformOp::Redact { field, replacement } => {
-                    // Guard: only call redact_field if the field actually exists.
-                    // Per spec, redact on a nonexistent field MUST be a no-op.
-                    let result = if record.get_field(field).is_some() {
-                        record.redact_field(field, replacement)
-                    } else {
-                        false
+                TransformOp::Redact {
+                    field,
+                    replacement,
+                    regex,
+                } => {
+                    // Per spec:
+                    // - Redact on a nonexistent field MUST be a no-op.
+                    // - When `regex` is set and produces no match, no
+                    //   modification is applied.
+                    // - When `regex` is unset, the entire value is replaced.
+                    let result = match regex {
+                        Some(re) => {
+                            let current = record.get_field(field).map(|c| c.into_owned());
+                            match current {
+                                Some(current) => {
+                                    let new_value = re.replace_all(&current, replacement.as_str());
+                                    if new_value == current {
+                                        false
+                                    } else {
+                                        let owned = new_value.into_owned();
+                                        record.set_field(field, &owned);
+                                        true
+                                    }
+                                }
+                                None => false,
+                            }
+                        }
+                        None => {
+                            if record.field_exists(field) {
+                                record.set_field(field, replacement);
+                                true
+                            } else {
+                                false
+                            }
+                        }
                     };
                     if let Some(s) = stats {
                         if result {
@@ -96,7 +149,28 @@ impl<S: Signal> CompiledTransform<S> {
                     result
                 }
                 TransformOp::Rename { from, to, upsert } => {
-                    let result = record.rename_field(from, to, *upsert);
+                    let result = if !record.field_exists(from) {
+                        false
+                    } else if let Some(to_selector) = S::rename_target(from, to) {
+                        let target_exists = record.field_exists(&to_selector);
+                        if target_exists && !*upsert {
+                            false
+                        } else {
+                            // Upsert: clear the destination first so consumers
+                            // backed by append-style storage (e.g. raw protobuf
+                            // KeyValue vectors) can't produce duplicate keys.
+                            // No-op for HashMap-backed consumers since
+                            // `move_field` already overwrites them.
+                            if target_exists {
+                                record.delete_field(&to_selector);
+                            }
+                            record.move_field(from, &to_selector);
+                            true
+                        }
+                    } else {
+                        // Rename of a simple field is a no-op (matches Go/Zig).
+                        false
+                    };
                     if let Some(s) = stats {
                         if result {
                             s.rename.record_hit();
@@ -111,7 +185,12 @@ impl<S: Signal> CompiledTransform<S> {
                     value,
                     upsert,
                 } => {
-                    let result = record.add_field(field, value, *upsert);
+                    let result = if !*upsert && record.field_exists(field) {
+                        false
+                    } else {
+                        record.set_field(field, value);
+                        true
+                    };
                     if let Some(s) = stats {
                         if result {
                             s.add.record_hit();
@@ -138,7 +217,9 @@ impl<S: Signal> CompiledTransform<S> {
 /// Log-specific transform compilation from proto.
 impl CompiledTransform<LogSignal> {
     /// Build from proto LogTransform.
-    pub fn from_proto(transform: &LogTransform) -> Self {
+    ///
+    /// Returns an error if any redact regex fails to compile.
+    pub fn from_proto(transform: &LogTransform, policy_id: &str) -> Result<Self, PolicyError> {
         let mut ops = Vec::new();
 
         // Remove operations first
@@ -151,9 +232,19 @@ impl CompiledTransform<LogSignal> {
         // Redact operations second
         for redact in &transform.redact {
             if let Some(field) = Self::convert_redact_field(&redact.field) {
+                let regex = match &redact.regex {
+                    Some(pattern) => {
+                        Some(Regex::new(pattern).map_err(|e| PolicyError::InvalidPolicy {
+                            policy_id: policy_id.to_string(),
+                            reason: format!("invalid redact regex '{}': {}", pattern, e),
+                        })?)
+                    }
+                    None => None,
+                };
                 ops.push(TransformOp::Redact {
                     field,
                     replacement: redact.replacement.clone(),
+                    regex,
                 });
             }
         }
@@ -180,7 +271,7 @@ impl CompiledTransform<LogSignal> {
             }
         }
 
-        Self { ops }
+        Ok(Self { ops })
     }
 
     fn convert_remove_field(field: &Option<log_remove::Field>) -> Option<LogFieldSelector> {
@@ -308,7 +399,21 @@ mod tests {
     }
 
     impl Transformable for TestLog {
-        fn remove_field(&mut self, field: &LogFieldSelector) -> bool {
+        fn set_field(&mut self, field: &LogFieldSelector, value: &str) {
+            match field {
+                LogFieldSelector::Simple(LogField::Body) => {
+                    self.body = Some(value.to_string());
+                }
+                LogFieldSelector::LogAttribute(path) => {
+                    if let Some(key) = path.first() {
+                        self.attributes.insert(key.clone(), value.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn delete_field(&mut self, field: &LogFieldSelector) -> bool {
             match field {
                 LogFieldSelector::Simple(LogField::Body) => self.body.take().is_some(),
                 LogFieldSelector::LogAttribute(path) => path
@@ -319,35 +424,7 @@ mod tests {
             }
         }
 
-        fn redact_field(&mut self, field: &LogFieldSelector, replacement: &str) -> bool {
-            match field {
-                LogFieldSelector::Simple(LogField::Body) => {
-                    if self.body.is_some() {
-                        self.body = Some(replacement.to_string());
-                        true
-                    } else {
-                        false
-                    }
-                }
-                LogFieldSelector::LogAttribute(path) => {
-                    let Some(key) = path.first() else {
-                        return false;
-                    };
-                    if self.attributes.contains_key(key) {
-                        self.attributes.insert(key.clone(), replacement.to_string());
-                        true
-                    } else {
-                        false
-                    }
-                }
-                _ => false,
-            }
-        }
-
-        fn rename_field(&mut self, from: &LogFieldSelector, to: &str, upsert: bool) -> bool {
-            if !upsert && self.attributes.contains_key(to) {
-                return false;
-            }
+        fn move_field(&mut self, from: &LogFieldSelector, to: &LogFieldSelector) {
             let value = match from {
                 LogFieldSelector::Simple(LogField::Body) => self.body.take(),
                 LogFieldSelector::LogAttribute(path) => {
@@ -355,34 +432,12 @@ mod tests {
                 }
                 _ => None,
             };
-            if let Some(v) = value {
-                self.attributes.insert(to.to_string(), v);
-                true
-            } else {
-                false
-            }
-        }
-
-        fn add_field(&mut self, field: &LogFieldSelector, value: &str, upsert: bool) -> bool {
-            match field {
-                LogFieldSelector::Simple(LogField::Body) => {
-                    if !upsert && self.body.is_some() {
-                        return false;
-                    }
-                    self.body = Some(value.to_string());
-                    true
-                }
-                LogFieldSelector::LogAttribute(path) => {
-                    let Some(key) = path.first() else {
-                        return false;
-                    };
-                    if !upsert && self.attributes.contains_key(key) {
-                        return false;
-                    }
-                    self.attributes.insert(key.clone(), value.to_string());
-                    true
-                }
-                _ => false,
+            let target_key = match to {
+                LogFieldSelector::LogAttribute(path) => path.first().cloned(),
+                _ => None,
+            };
+            if let (Some(v), Some(k)) = (value, target_key) {
+                self.attributes.insert(k, v);
             }
         }
     }
@@ -390,7 +445,7 @@ mod tests {
     #[test]
     fn from_proto_empty() {
         let proto = LogTransform::default();
-        let compiled = CompiledTransform::<LogSignal>::from_proto(&proto);
+        let compiled = CompiledTransform::<LogSignal>::from_proto(&proto, "p").unwrap();
         assert!(compiled.is_empty());
     }
 
@@ -402,7 +457,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let compiled = CompiledTransform::from_proto(&proto);
+        let compiled = CompiledTransform::from_proto(&proto, "p").unwrap();
         assert_eq!(compiled.ops.len(), 1);
         assert!(matches!(&compiled.ops[0], TransformOp::Remove { field }
             if matches!(field, LogFieldSelector::Simple(LogField::Body))));
@@ -417,16 +472,58 @@ mod tests {
                     path: vec!["secret".to_string()],
                 })),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             }],
             ..Default::default()
         };
-        let compiled = CompiledTransform::from_proto(&proto);
+        let compiled = CompiledTransform::from_proto(&proto, "p").unwrap();
         assert_eq!(compiled.ops.len(), 1);
-        assert!(
-            matches!(&compiled.ops[0], TransformOp::Redact { field, replacement }
+        assert!(matches!(
+            &compiled.ops[0],
+            TransformOp::Redact { field, replacement, regex: None }
             if matches!(field, LogFieldSelector::LogAttribute(p) if p == &vec!["secret".to_string()])
-            && replacement == "[REDACTED]")
-        );
+            && replacement == "[REDACTED]"
+        ));
+    }
+
+    #[test]
+    fn from_proto_with_redact_regex_compiles() {
+        use crate::proto::tero::policy::v1::AttributePath;
+        let proto = LogTransform {
+            redact: vec![LogRedact {
+                field: Some(log_redact::Field::LogAttribute(AttributePath {
+                    path: vec!["card".to_string()],
+                })),
+                replacement: "****".to_string(),
+                regex: Some(r"\d{4}".to_string()),
+            }],
+            ..Default::default()
+        };
+        let compiled = CompiledTransform::from_proto(&proto, "p").unwrap();
+        assert!(matches!(
+            &compiled.ops[0],
+            TransformOp::Redact { regex: Some(_), .. }
+        ));
+    }
+
+    #[test]
+    fn from_proto_with_invalid_redact_regex_returns_error() {
+        use crate::proto::tero::policy::v1::AttributePath;
+        let proto = LogTransform {
+            redact: vec![LogRedact {
+                field: Some(log_redact::Field::LogAttribute(AttributePath {
+                    path: vec!["card".to_string()],
+                })),
+                replacement: "****".to_string(),
+                regex: Some("(".to_string()),
+            }],
+            ..Default::default()
+        };
+        let err = CompiledTransform::from_proto(&proto, "bad-policy").unwrap_err();
+        assert!(matches!(
+            err,
+            PolicyError::InvalidPolicy { ref policy_id, .. } if policy_id == "bad-policy"
+        ));
     }
 
     #[test]
@@ -442,7 +539,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let compiled = CompiledTransform::from_proto(&proto);
+        let compiled = CompiledTransform::from_proto(&proto, "p").unwrap();
         assert_eq!(compiled.ops.len(), 1);
         assert!(
             matches!(&compiled.ops[0], TransformOp::Rename { from, to, upsert }
@@ -464,7 +561,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let compiled = CompiledTransform::from_proto(&proto);
+        let compiled = CompiledTransform::from_proto(&proto, "p").unwrap();
         assert_eq!(compiled.ops.len(), 1);
         assert!(
             matches!(&compiled.ops[0], TransformOp::Add { field, value, upsert }
@@ -501,9 +598,10 @@ mod tests {
                     path: vec!["redact".to_string()],
                 })),
                 replacement: "X".to_string(),
+                regex: None,
             }],
         };
-        let compiled = CompiledTransform::from_proto(&proto);
+        let compiled = CompiledTransform::from_proto(&proto, "p").unwrap();
         assert_eq!(compiled.ops.len(), 4);
 
         assert!(matches!(&compiled.ops[0], TransformOp::Remove { .. }));
@@ -524,6 +622,7 @@ mod tests {
                 TransformOp::Redact {
                     field: LogFieldSelector::LogAttribute(vec!["secret".to_string()]),
                     replacement: "[REDACTED]".to_string(),
+                    regex: None,
                 },
                 TransformOp::Rename {
                     from: LogFieldSelector::LogAttribute(vec!["old_name".to_string()]),
@@ -561,6 +660,7 @@ mod tests {
                 TransformOp::Redact {
                     field: LogFieldSelector::LogAttribute(vec!["nonexistent".to_string()]),
                     replacement: "X".to_string(),
+                    regex: None,
                 },
             ],
         };
@@ -579,6 +679,7 @@ mod tests {
             ops: vec![TransformOp::Redact {
                 field: LogFieldSelector::LogAttribute(vec!["missing".to_string()]),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             }],
         };
 
@@ -588,5 +689,74 @@ mod tests {
         assert!(!log.attributes.contains_key("missing"));
         // Existing attributes must be unchanged
         assert_eq!(log.attributes.get("existing"), Some(&"keep-me".to_string()));
+    }
+
+    #[test]
+    fn redact_with_regex_replaces_matching_substrings() {
+        let mut log = TestLog::new().with_attr("body", "card 4111 2222 3333 4444 expires soon");
+        let transform = CompiledTransform::<LogSignal> {
+            ops: vec![TransformOp::Redact {
+                field: LogFieldSelector::LogAttribute(vec!["body".to_string()]),
+                replacement: "****".to_string(),
+                regex: Some(Regex::new(r"\d{4}").unwrap()),
+            }],
+        };
+        let applied = transform.apply(&mut log);
+        assert_eq!(applied, 1);
+        assert_eq!(
+            log.attributes.get("body"),
+            Some(&"card **** **** **** **** expires soon".to_string())
+        );
+    }
+
+    #[test]
+    fn redact_with_regex_no_match_leaves_value_unchanged() {
+        let mut log = TestLog::new().with_attr("body", "no digits here");
+        let transform = CompiledTransform::<LogSignal> {
+            ops: vec![TransformOp::Redact {
+                field: LogFieldSelector::LogAttribute(vec!["body".to_string()]),
+                replacement: "****".to_string(),
+                regex: Some(Regex::new(r"\d{4}").unwrap()),
+            }],
+        };
+        let applied = transform.apply(&mut log);
+        assert_eq!(applied, 0);
+        assert_eq!(
+            log.attributes.get("body"),
+            Some(&"no digits here".to_string())
+        );
+    }
+
+    #[test]
+    fn redact_with_regex_supports_capture_group_template() {
+        let mut log = TestLog::new().with_attr("body", "email alice@example.com here");
+        let transform = CompiledTransform::<LogSignal> {
+            ops: vec![TransformOp::Redact {
+                field: LogFieldSelector::LogAttribute(vec!["body".to_string()]),
+                replacement: "$1@***".to_string(),
+                regex: Some(Regex::new(r"(\w+)@[\w.]+").unwrap()),
+            }],
+        };
+        let applied = transform.apply(&mut log);
+        assert_eq!(applied, 1);
+        assert_eq!(
+            log.attributes.get("body"),
+            Some(&"email alice@*** here".to_string())
+        );
+    }
+
+    #[test]
+    fn redact_with_regex_on_nonexistent_field_is_noop() {
+        let mut log = TestLog::new();
+        let transform = CompiledTransform::<LogSignal> {
+            ops: vec![TransformOp::Redact {
+                field: LogFieldSelector::LogAttribute(vec!["missing".to_string()]),
+                replacement: "****".to_string(),
+                regex: Some(Regex::new(r"\d+").unwrap()),
+            }],
+        };
+        let applied = transform.apply(&mut log);
+        assert_eq!(applied, 0);
+        assert!(!log.attributes.contains_key("missing"));
     }
 }

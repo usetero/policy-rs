@@ -46,7 +46,8 @@ pub struct AttributePath {
 /// LogTarget defines matching and actions for logs.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogTarget {
-    /// Matchers to identify which logs this policy applies to (AND logic)
+    /// Matchers to identify which logs this policy applies to (AND logic).
+    /// Implementations MUST reject policies with an empty match list.
     #[prost(message, repeated, tag = "1")]
     pub r#match: ::prost::alloc::vec::Vec<LogMatcher>,
     /// The keep field controls whether matching telemetry survives. It unifies
@@ -57,8 +58,13 @@ pub struct LogTarget {
     ///    "all"  - Keep everything (default, can be omitted)
     ///    "none" - Drop everything
     ///    "N%"   - Keep N percent (0-100), e.g. "50%"
-    ///    "N/s"  - Keep at most N per second, e.g. "100/s"
-    ///    "N/m"  - Keep at most N per minute, e.g. "1000/m"
+    ///    "N/s"  - Keep at most N per second (shorthand for "N/1s"), e.g. "100/s"
+    ///    "N/m"  - Keep at most N per minute (shorthand for "N/1m"), e.g. "1000/m"
+    ///    "N/Ds" - Keep at most N per D-second window, e.g. "1/5s"
+    ///    "N/Dm" - Keep at most N per D-minute window, e.g. "1/5m"
+    ///
+    /// For rate limiting, both N and D must be positive integers. Fractional
+    /// values are invalid and should be rejected by implementations.
     #[prost(string, tag = "2")]
     pub keep: ::prost::alloc::string::String,
     /// Transform operations to apply
@@ -69,7 +75,7 @@ pub struct LogTarget {
     /// keep/drop decision. Use for lifecycle events (request_id, trace_id, job_id)
     /// to avoid sampling individual log lines independently.
     ///
-    /// Only applies when keep is a sampling value (N%, N/s, N/m).
+    /// Only applies when keep is a sampling value (N%, N/s, N/m, N/Ds, N/Dm).
     /// Example: sample_key = log_attribute\["request_id"\] with keep = "10%" means
     /// 10% of requests are kept, with all logs from each kept request preserved.
     #[prost(message, optional, tag = "4")]
@@ -219,9 +225,18 @@ pub mod log_remove {
 /// LogRedact masks a field value.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogRedact {
-    /// Replacement value (e.g., "\[REDACTED\]")
+    /// Replacement value (e.g., "\[REDACTED\]"). When regex is set, this is
+    /// interpreted as a replacement template.
     #[prost(string, tag = "10")]
     pub replacement: ::prost::alloc::string::String,
+    /// Optional RE2 regular expression for targeted replacement. If unset, the
+    /// entire field value is replaced. If set and no match is present, no
+    /// modification is applied. If set and a match is present, all non-overlapping
+    /// instances of the full regular expression match are replaced. Capture groups
+    /// may be referenced from the replacement string, but do not change the
+    /// replacement range.
+    #[prost(string, optional, tag = "11")]
+    pub regex: ::core::option::Option<::prost::alloc::string::String>,
     /// FIELD SELECTION (keep in sync with LogMatcher, LogRemove, LogRename, LogAdd)
     /// The field to redact. Exactly one must be set.
     #[prost(oneof = "log_redact::Field", tags = "1, 2, 3, 4")]
@@ -365,7 +380,8 @@ impl LogField {
 /// MetricTarget defines matching and actions for metrics.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MetricTarget {
-    /// Matchers to identify which metrics this policy applies to (AND logic)
+    /// Matchers to identify which metrics this policy applies to (AND logic).
+    /// Implementations MUST reject policies with an empty match list.
     #[prost(message, repeated, tag = "1")]
     pub r#match: ::prost::alloc::vec::Vec<MetricMatcher>,
     /// Whether to keep matching metrics (true) or drop them (false)
@@ -569,7 +585,8 @@ impl AggregationTemporality {
 /// TraceTarget defines matching and sampling actions for traces/spans.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TraceTarget {
-    /// Matchers to identify which spans this policy applies to (AND logic)
+    /// Matchers to identify which spans this policy applies to (AND logic).
+    /// Implementations MUST reject policies with an empty match list.
     #[prost(message, repeated, tag = "1")]
     pub r#match: ::prost::alloc::vec::Vec<TraceMatcher>,
     /// The keep field controls whether matching spans are sampled.
@@ -839,15 +856,19 @@ pub enum SamplingMode {
     /// to make deterministic sampling decisions. This is the default mode.
     /// Suitable when you want consistent sampling across multiple collectors.
     HashSeed = 1,
-    /// proportional mode: Respects existing sampling probability in tracestate.
-    /// Adjusts the effective probability to achieve the target percentage
-    /// relative to the incoming probability. For example, if incoming spans
-    /// are already sampled at 50% and target is 10%, this mode will sample
-    /// 20% of incoming spans to achieve 10% overall.
+    /// proportional mode: Multiplies the incoming probability by the configured
+    /// percentage to compute the output threshold. This reduces traffic by a
+    /// fixed factor regardless of arriving thresholds.
+    ///    T_o = ProbabilityToThreshold(percentage/100 * ThresholdToProbability(T_s))
+    /// For example, if incoming spans are sampled at 50% and percentage is 10%,
+    /// the output probability is 0.1 * 0.5 = 5%.
     Proportional = 2,
-    /// equalizing mode: Attempts to achieve the target percentage by preferentially
-    /// sampling spans that have been sampled at higher rates. This helps balance
-    /// the sampling across different sources while respecting existing thresholds.
+    /// equalizing mode: Aims to make all spans have an equal threshold after
+    /// passing this stage. When the incoming threshold T_s is already more
+    /// restrictive than the configured target T_d, the span is kept with T_s
+    /// unchanged. Otherwise, spans are selected using the target threshold T_d.
+    /// This preferentially keeps rare spans while applying a hard cutoff to
+    /// over-sampled spans.
     Equalizing = 3,
 }
 impl SamplingMode {

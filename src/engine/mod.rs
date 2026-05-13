@@ -263,7 +263,7 @@ impl PolicyEngine {
     /// 1. Standard matching (same as `evaluate`)
     /// 2. Extract 56-bit randomness from tracestate `rv` sub-key or TraceID
     /// 3. Compare randomness against the winning policy's rejection threshold
-    /// 4. If sampled, write the `th` value back to the span via `Transformable::add_field`
+    /// 4. If sampled, write the `th` value back to the span via `Transformable::set_field`
     ///
     /// The `th` value is written to `TraceFieldSelector::SamplingThreshold`, which the
     /// user's `Transformable` implementation should handle by updating the tracestate.
@@ -305,10 +305,9 @@ impl PolicyEngine {
             }
             CompiledKeep::All => {
                 // 100% sampling — write th=0 and keep
-                span.add_field(
+                span.set_field(
                     &TraceFieldSelector::SamplingThreshold,
                     &encode_threshold(0, trace_sampling.precision),
-                    true,
                 );
                 record_match_stats(compiled, winner_idx, &matching, true);
                 return Ok(EvaluateResult::Keep {
@@ -348,13 +347,12 @@ impl PolicyEngine {
                     Some(r) => {
                         let keep = r >= trace_sampling.threshold;
                         if keep {
-                            span.add_field(
+                            span.set_field(
                                 &TraceFieldSelector::SamplingThreshold,
                                 &encode_threshold(
                                     trace_sampling.threshold,
                                     trace_sampling.precision,
                                 ),
-                                true,
                             );
                         }
                         record_match_stats(compiled, winner_idx, &matching, keep);
@@ -392,10 +390,9 @@ impl PolicyEngine {
 
                         let keep = r >= t_o;
                         if keep {
-                            span.add_field(
+                            span.set_field(
                                 &TraceFieldSelector::SamplingThreshold,
                                 &encode_threshold(t_o, trace_sampling.precision),
-                                true,
                             );
                         }
                         record_match_stats(compiled, winner_idx, &matching, keep);
@@ -436,10 +433,9 @@ impl PolicyEngine {
                         };
 
                         if keep {
-                            span.add_field(
+                            span.set_field(
                                 &TraceFieldSelector::SamplingThreshold,
                                 &encode_threshold(effective_th, trace_sampling.precision),
-                                true,
                             );
                         }
                         record_match_stats(compiled, winner_idx, &matching, keep);
@@ -535,7 +531,7 @@ fn find_matching_policies<S: Signal>(
             continue;
         }
 
-        let exists = record.get_field(&check.field).is_some();
+        let exists = record.field_exists(&check.field);
         let field_matches = exists == check.should_exist;
 
         if check.is_negated {
@@ -707,7 +703,29 @@ mod tests {
     }
 
     impl Transformable for TestLog {
-        fn remove_field(&mut self, field: &LogFieldSelector) -> bool {
+        fn set_field(&mut self, field: &LogFieldSelector, value: &str) {
+            match field {
+                LogFieldSelector::Simple(log_field) => match log_field {
+                    LogField::Body => self.body = Some(value.to_string()),
+                    LogField::SeverityText => self.severity_text = Some(value.to_string()),
+                    _ => {}
+                },
+                LogFieldSelector::LogAttribute(path) => {
+                    if let Some(key) = path.first() {
+                        self.log_attributes.insert(key.clone(), value.to_string());
+                    }
+                }
+                LogFieldSelector::ResourceAttribute(path) => {
+                    if let Some(key) = path.first() {
+                        self.resource_attributes
+                            .insert(key.clone(), value.to_string());
+                    }
+                }
+                LogFieldSelector::ScopeAttribute(_) => {}
+            }
+        }
+
+        fn delete_field(&mut self, field: &LogFieldSelector) -> bool {
             match field {
                 LogFieldSelector::Simple(log_field) => match log_field {
                     LogField::Body => self.body.take().is_some(),
@@ -726,59 +744,7 @@ mod tests {
             }
         }
 
-        fn redact_field(&mut self, field: &LogFieldSelector, replacement: &str) -> bool {
-            match field {
-                LogFieldSelector::Simple(log_field) => match log_field {
-                    LogField::Body => {
-                        if self.body.is_some() {
-                            self.body = Some(replacement.to_string());
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    LogField::SeverityText => {
-                        if self.severity_text.is_some() {
-                            self.severity_text = Some(replacement.to_string());
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    _ => false,
-                },
-                LogFieldSelector::LogAttribute(path) => {
-                    let Some(key) = path.first() else {
-                        return false;
-                    };
-                    if self.log_attributes.contains_key(key) {
-                        self.log_attributes
-                            .insert(key.clone(), replacement.to_string());
-                        true
-                    } else {
-                        false
-                    }
-                }
-                LogFieldSelector::ResourceAttribute(path) => {
-                    let Some(key) = path.first() else {
-                        return false;
-                    };
-                    if self.resource_attributes.contains_key(key) {
-                        self.resource_attributes
-                            .insert(key.clone(), replacement.to_string());
-                        true
-                    } else {
-                        false
-                    }
-                }
-                LogFieldSelector::ScopeAttribute(_) => false,
-            }
-        }
-
-        fn rename_field(&mut self, from: &LogFieldSelector, to: &str, upsert: bool) -> bool {
-            if !upsert && self.log_attributes.contains_key(to) {
-                return false;
-            }
+        fn move_field(&mut self, from: &LogFieldSelector, to: &LogFieldSelector) {
             let value = match from {
                 LogFieldSelector::Simple(log_field) => match log_field {
                     LogField::Body => self.body.take(),
@@ -793,55 +759,21 @@ mod tests {
                     .and_then(|key| self.resource_attributes.remove(key)),
                 LogFieldSelector::ScopeAttribute(_) => None,
             };
-            if let Some(v) = value {
-                self.log_attributes.insert(to.to_string(), v);
-                true
-            } else {
-                false
-            }
-        }
-
-        fn add_field(&mut self, field: &LogFieldSelector, value: &str, upsert: bool) -> bool {
-            match field {
-                LogFieldSelector::Simple(log_field) => match log_field {
-                    LogField::Body => {
-                        if !upsert && self.body.is_some() {
-                            return false;
-                        }
-                        self.body = Some(value.to_string());
-                        true
-                    }
-                    LogField::SeverityText => {
-                        if !upsert && self.severity_text.is_some() {
-                            return false;
-                        }
-                        self.severity_text = Some(value.to_string());
-                        true
-                    }
-                    _ => false,
-                },
+            let Some(v) = value else {
+                return;
+            };
+            match to {
                 LogFieldSelector::LogAttribute(path) => {
-                    let Some(key) = path.first() else {
-                        return false;
-                    };
-                    if !upsert && self.log_attributes.contains_key(key) {
-                        return false;
+                    if let Some(key) = path.first() {
+                        self.log_attributes.insert(key.clone(), v);
                     }
-                    self.log_attributes.insert(key.clone(), value.to_string());
-                    true
                 }
                 LogFieldSelector::ResourceAttribute(path) => {
-                    let Some(key) = path.first() else {
-                        return false;
-                    };
-                    if !upsert && self.resource_attributes.contains_key(key) {
-                        return false;
+                    if let Some(key) = path.first() {
+                        self.resource_attributes.insert(key.clone(), v);
                     }
-                    self.resource_attributes
-                        .insert(key.clone(), value.to_string());
-                    true
                 }
-                LogFieldSelector::ScopeAttribute(_) => false,
+                _ => {}
             }
         }
     }
@@ -1345,6 +1277,79 @@ mod tests {
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
+    /// Regression: a record whose attribute is present but not representable
+    /// as a string (e.g. an OTel `intValue: 42`) must still satisfy
+    /// `exists: true` matchers. The fix is to call `field_exists` (which
+    /// implementations can override) rather than `get_field(...).is_some()`,
+    /// which conflates "absent" with "present but non-string."
+    #[tokio::test]
+    async fn evaluate_exists_check_on_non_string_attribute() {
+        struct NonStringAttrLog {
+            string_attrs: HashMap<String, String>,
+            /// Keys whose value is present but not a string (e.g. an int).
+            non_string_keys: std::collections::HashSet<String>,
+        }
+
+        impl Matchable for NonStringAttrLog {
+            type Signal = LogSignal;
+
+            fn get_field(&self, field: &LogFieldSelector) -> Option<Cow<'_, str>> {
+                match field {
+                    LogFieldSelector::LogAttribute(path) => path
+                        .first()
+                        .and_then(|key| self.string_attrs.get(key))
+                        .map(|s| Cow::Borrowed(s.as_str())),
+                    _ => None,
+                }
+            }
+
+            fn field_exists(&self, field: &LogFieldSelector) -> bool {
+                match field {
+                    LogFieldSelector::LogAttribute(path) => path
+                        .first()
+                        .map(|key| {
+                            self.string_attrs.contains_key(key)
+                                || self.non_string_keys.contains(key)
+                        })
+                        .unwrap_or(false),
+                    _ => self.get_field(field).is_some(),
+                }
+            }
+        }
+
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+        let policy = make_policy(
+            "keep-when-count-present",
+            vec![log_attr_exists_matcher("count", true, false)],
+            "all",
+            true,
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // `count` is present as a non-string (e.g. intValue: 42).
+        // `get_field` returns None, but `field_exists` returns true.
+        let mut non_string_keys = std::collections::HashSet::new();
+        non_string_keys.insert("count".to_string());
+        let log = NonStringAttrLog {
+            string_attrs: HashMap::new(),
+            non_string_keys,
+        };
+
+        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        assert_eq!(
+            result,
+            EvaluateResult::Keep {
+                policy_id: "keep-when-count-present".to_string(),
+                transformed: false,
+            },
+            "exists: true must fire even when the value is not representable as a string"
+        );
+    }
+
     #[tokio::test]
     async fn evaluate_most_restrictive_policy_wins() {
         let registry = PolicyRegistry::new();
@@ -1820,6 +1825,7 @@ mod tests {
             redact: vec![LogRedact {
                 field: Some(log_redact::Field::LogAttribute(attr_path("password"))),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             }],
             ..Default::default()
         };
@@ -1854,6 +1860,98 @@ mod tests {
         assert_eq!(
             log.log_attributes.get("password"),
             Some(&"[REDACTED]".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn evaluate_and_transform_redact_attribute_with_regex() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let transform = LogTransform {
+            redact: vec![LogRedact {
+                field: Some(log_redact::Field::LogAttribute(attr_path("body"))),
+                replacement: "****".to_string(),
+                regex: Some(r"\d{4}".to_string()),
+            }],
+            ..Default::default()
+        };
+
+        let policy = make_policy_with_transform(
+            "redact-card-digits",
+            vec![body_regex_matcher("payment", false)],
+            "all",
+            true,
+            Some(transform),
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let mut log = TestLog::new()
+            .with_body("payment received")
+            .with_log_attr("body", "card 4111 2222 3333 4444 ok");
+
+        let result = engine
+            .evaluate_and_transform(&snapshot, &mut log)
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            EvaluateResult::Keep {
+                policy_id: "redact-card-digits".to_string(),
+                transformed: true,
+            }
+        );
+        assert_eq!(
+            log.log_attributes.get("body"),
+            Some(&"card **** **** **** **** ok".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn evaluate_and_transform_redact_regex_no_match_leaves_value_unchanged() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+
+        let transform = LogTransform {
+            redact: vec![LogRedact {
+                field: Some(log_redact::Field::LogAttribute(attr_path("body"))),
+                replacement: "****".to_string(),
+                regex: Some(r"\d{4}".to_string()),
+            }],
+            ..Default::default()
+        };
+
+        let policy = make_policy_with_transform(
+            "redact-nomatch",
+            vec![body_regex_matcher("payment", false)],
+            "all",
+            true,
+            Some(transform),
+        );
+        handle.update(vec![policy]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+        let mut log = TestLog::new()
+            .with_body("payment received")
+            .with_log_attr("body", "no digits here");
+
+        let result = engine
+            .evaluate_and_transform(&snapshot, &mut log)
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            EvaluateResult::Keep {
+                policy_id: "redact-nomatch".to_string(),
+                transformed: false,
+            }
+        );
+        assert_eq!(
+            log.log_attributes.get("body"),
+            Some(&"no digits here".to_string())
         );
     }
 
@@ -2066,6 +2164,7 @@ mod tests {
             redact: vec![LogRedact {
                 field: Some(log_redact::Field::LogAttribute(attr_path("nonexistent"))),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             }],
             ..Default::default()
         };
@@ -2109,6 +2208,7 @@ mod tests {
             redact: vec![LogRedact {
                 field: Some(log_redact::Field::LogAttribute(attr_path("secret"))),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             }],
             add: vec![LogAdd {
                 field: Some(log_add::Field::LogAttribute(attr_path("processed"))),
@@ -2170,6 +2270,7 @@ mod tests {
                     "also_nonexistent",
                 ))),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             }],
             ..Default::default()
         };
@@ -3564,26 +3665,17 @@ mod tests {
     }
 
     impl Transformable for TestSpan {
-        fn remove_field(&mut self, _field: &TraceFieldSelector) -> bool {
-            false
-        }
-
-        fn redact_field(&mut self, _field: &TraceFieldSelector, _replacement: &str) -> bool {
-            false
-        }
-
-        fn rename_field(&mut self, _from: &TraceFieldSelector, _to: &str, _upsert: bool) -> bool {
-            false
-        }
-
-        fn add_field(&mut self, field: &TraceFieldSelector, value: &str, _upsert: bool) -> bool {
+        fn set_field(&mut self, field: &TraceFieldSelector, value: &str) {
             if matches!(field, TraceFieldSelector::SamplingThreshold) {
                 self.th_value = Some(value.to_string());
-                true
-            } else {
-                false
             }
         }
+
+        fn delete_field(&mut self, _field: &TraceFieldSelector) -> bool {
+            false
+        }
+
+        fn move_field(&mut self, _from: &TraceFieldSelector, _to: &TraceFieldSelector) {}
     }
 
     fn make_trace_policy(

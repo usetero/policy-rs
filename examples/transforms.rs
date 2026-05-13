@@ -72,10 +72,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             LogRedact {
                 field: Some(log_redact::Field::LogAttribute(attr_path("password"))),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             },
             LogRedact {
                 field: Some(log_redact::Field::LogAttribute(attr_path("api_key"))),
                 replacement: "[REDACTED]".to_string(),
+                regex: None,
             },
         ],
         add: vec![LogAdd {
