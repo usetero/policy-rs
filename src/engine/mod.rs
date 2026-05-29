@@ -67,8 +67,27 @@ pub enum EvaluateResult {
 
 /// Policy evaluation engine.
 ///
-/// The engine evaluates log records against policies using pre-compiled
-/// Hyperscan databases from the policy snapshot.
+/// The engine is stateless except for per-policy rate-limiter buckets.
+/// All three eval methods are synchronous — they do no I/O and contain no
+/// async points, so callers do not need a tokio runtime.
+///
+/// # Choosing the right method
+///
+/// | Signal  | Method                        | Notes                                      |
+/// |---------|-------------------------------|--------------------------------------------|
+/// | **Log** | [`evaluate`] (read-only)      | Use when you don't need transforms.        |
+/// | **Log** | [`evaluate_and_transform`]    | Applies redact/remove/rename/add in-place. |
+/// | **Metric** | [`evaluate`]               | Metrics have no transforms.                |
+/// | **Trace** | [`evaluate_trace`]          | Runs OTel consistent-probability sampling  |
+/// |          |                               | and writes `th` back to the span.          |
+///
+/// The signal is selected automatically from the `T::Signal` associated type
+/// on your [`Matchable`] impl — there is no explicit signal argument.
+///
+/// [`evaluate`]: PolicyEngine::evaluate
+/// [`evaluate_and_transform`]: PolicyEngine::evaluate_and_transform
+/// [`evaluate_trace`]: PolicyEngine::evaluate_trace
+/// [`Matchable`]: crate::Matchable
 pub struct PolicyEngine {
     /// Rate limiters for policies with rate limits.
     rate_limiters: RateLimiters,
