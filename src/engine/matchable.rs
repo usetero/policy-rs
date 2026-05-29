@@ -9,35 +9,69 @@ use super::signal::Signal;
 /// Implementors provide field access for telemetry records. The engine uses
 /// two primitives:
 ///
-/// - [`get_field`](Matchable::get_field) returns the field's value for pattern
-///   matching, or `None` when the field is absent **or** present but not
-///   representable as a string.
+/// - [`get_field`](Matchable::get_field) returns the field's string value for
+///   pattern matching, or `None` when the field is absent **or** present but
+///   not representable as a string (e.g. OTel `intValue: 42`).
 /// - [`field_exists`](Matchable::field_exists) reports whether the field is
-///   present, regardless of whether its value can be expressed as a string. The
-///   default body answers "present" as `get_field(...).is_some()`, which is
-///   correct only when every present value is a string. Records that carry
-///   non-string values (e.g. `intValue: 42`) must override `field_exists` so
-///   that `exists: true` matchers fire correctly.
+///   present at all, regardless of value type. The default body delegates to
+///   `get_field(...).is_some()`, which is only correct when every present value
+///   is a string. Records carrying non-string values **must** override this
+///   method so that `exists: true` matchers fire correctly.
 ///
-/// The associated `Signal` type determines which field selector is used,
-/// binding this implementation to a specific telemetry signal (logs, metrics, etc.).
+/// # Contract for OTel-compatible adapters
+///
+/// The rules below are derived from the policy conformance suite. Violating any
+/// of them produces silent match failures — the engine never surfaces a "wrong
+/// type" error, it simply treats the field as absent.
+///
+/// ### String fields (body, severity_text, span name, metric name, …)
+/// - Return `Some(Cow::Borrowed(s))` for a non-empty string value.
+/// - Return `Some(Cow::Borrowed(""))` for a present-but-empty string. The engine
+///   will not match regex/exact/prefix patterns against an empty string, but
+///   `field_exists` should still return `true` if the field is logically present.
+/// - Return `None` when the field is absent.
+///
+/// ### Attribute fields (log/span/resource/scope attributes)
+/// - An OTel `AnyValue` is **only matchable** when it is a `stringValue`. Any
+///   other variant (`intValue`, `doubleValue`, `boolValue`, `bytesValue`,
+///   `arrayValue`, `kvlistValue`) must return `None` from `get_field` but
+///   `true` from `field_exists`, so that:
+///   - String matchers (`regex`, `exact`, etc.) do not fire on non-string values.
+///   - `exists: true` matchers still fire for any present value.
+///
+/// ### Enum fields (metric type, aggregation temporality, span status, span kind)
+/// - Synthesize a string using the helpers in [`crate::canonical`]:
+///   `canonical::metric_type_str(mt)`, `canonical::span_status_code_str(sc)`, etc.
+/// - These return the proto enum's `as_str_name()` output, which is what the
+///   engine compiles its exact-match pattern against.
+/// - **SpanStatus / Unset**: OTel's `Unset` status maps to proto
+///   `SpanStatusCode::Unspecified`. A span with an absent or default (proto3
+///   zero-value) status code is still considered *present* — return
+///   `canonical::span_status_code_str(SpanStatusCode::Unspecified)` rather
+///   than `None`.
+///
+/// ### ID fields (trace_id, span_id)
+/// - Must be encoded as lowercase hex strings (`[0-9a-f]`).
+/// - `trace_id` is 32 hex chars (128-bit); `span_id` is 16 hex chars (64-bit).
+/// - The sampling code slices the last 14 hex characters of `trace_id` for the
+///   56-bit randomness value — a non-hex `trace_id` returns `None` from the
+///   sampler rather than panicking, but consistent sampling will fall back.
+///
+/// ### Per-signal method mapping
+///
+/// | Signal  | Evaluation method                | Transform support |
+/// |---------|----------------------------------|-------------------|
+/// | Log     | `evaluate` / `evaluate_and_transform` | Yes (redact, remove, rename, add) |
+/// | Metric  | `evaluate`                       | No                |
+/// | Trace   | `evaluate_trace`                 | Yes (tracestate `th` update) |
 ///
 /// # Path-based Attribute Access
 ///
-/// For attribute selectors, the path is a `Vec<String>` representing nested attribute access:
+/// For attribute selectors, the path is a `Vec<String>` representing nested
+/// attribute access:
 ///
-/// - Single segment `["user_id"]` - access a flat attribute
-/// - Multiple segments `["http", "method"]` - traverse nested maps/objects
-/// - Three+ segments `["request", "headers", "content_type"]` - deep nesting
-///
-/// # Implementation Guidelines
-///
-/// 1. **Simple Fields**: Return the field value directly for the signal's simple field enum
-/// 2. **Flat Attributes**: For single-segment paths, use the first element as the key
-/// 3. **Nested Attributes**: For multi-segment paths, traverse the nested structure
-/// 4. **Missing Fields**: Return `None` if the field or any intermediate path doesn't exist
-/// 5. **Non-String Values**: Return `None` from `get_field` (the value can't drive a string
-///    match) and override `field_exists` so `exists: true` still reports the field as present.
+/// - Single segment `["user_id"]` — flat attribute
+/// - Multiple segments `["http", "method"]` — nested map/struct traversal
 ///
 /// # Example Implementation
 ///
@@ -52,18 +86,22 @@ use super::signal::Signal;
 ///                 _ => None,
 ///             },
 ///             LogFieldSelector::LogAttribute(path) => {
-///                 self.traverse_attributes(&self.log_attributes, path)
+///                 // Only return Some for stringValue; other OTel value types → None.
+///                 path.first()
+///                     .and_then(|k| self.attrs.get(k))
+///                     .and_then(|v| v.as_string())
+///                     .map(Cow::Borrowed)
 ///             }
 ///             _ => None,
 ///         }
 ///     }
 ///
-///     // Optional: override only when records carry non-string values.
+///     // Override because attributes can hold non-string OTel values.
 ///     fn field_exists(&self, field: &LogFieldSelector) -> bool {
 ///         match field {
 ///             LogFieldSelector::LogAttribute(path) => path
 ///                 .first()
-///                 .map(|key| self.log_attributes.contains_key(key))
+///                 .map(|k| self.attrs.contains_key(k))
 ///                 .unwrap_or(false),
 ///             _ => self.get_field(field).is_some(),
 ///         }
