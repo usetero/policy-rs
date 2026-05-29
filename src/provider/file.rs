@@ -2557,7 +2557,10 @@ mod tests {
         use std::sync::{Arc, Mutex};
 
         let file = create_temp_policy_file(&one_policy_json("initial"));
-        let provider = FileProvider::new(file.path());
+        // Use poll_interval as a fallback so the test is reliable in environments
+        // where FSEvents/inotify events are delayed or suppressed (e.g. overlayfs,
+        // network mounts, some CI environments).
+        let provider = FileProvider::new(file.path()).with_poll_interval(1);
 
         // Collect callback invocations: each entry is the list of policy IDs.
         let log: Arc<Mutex<Vec<Vec<String>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -2613,7 +2616,7 @@ mod tests {
 
         // Start with valid content.
         let file = create_temp_policy_file(&one_policy_json("good"));
-        let provider = FileProvider::new(file.path());
+        let provider = FileProvider::new(file.path()).with_poll_interval(1);
 
         let log: Arc<Mutex<Vec<Vec<String>>>> = Arc::new(Mutex::new(Vec::new()));
         let log2 = log.clone();
