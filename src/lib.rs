@@ -36,6 +36,7 @@
 //! }
 //! ```
 
+pub mod adapter;
 pub mod canonical;
 pub mod config;
 pub mod engine;
