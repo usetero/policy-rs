@@ -260,8 +260,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     print_log(&log_for_eval);
 
     // evaluate_and_transform() - reads AND modifies the log
-    let result_transform = engine
-        .evaluate_and_transform(&snapshot, &mut log_for_transform)?;
+    let result_transform = engine.evaluate_and_transform(&snapshot, &mut log_for_transform)?;
     println!("\nevaluate_and_transform() result: {:?}", result_transform);
     println!("Log after evaluate_and_transform() (transformed):");
     print_log(&log_for_transform);

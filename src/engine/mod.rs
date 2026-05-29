@@ -1129,9 +1129,7 @@ mod tests {
         let mut rejected_count = 0;
         for _ in 0..10 {
             let mut log = TestLog::new().with_body("any message");
-            let result = engine
-                .evaluate_and_transform(&snapshot, &mut log)
-                .unwrap();
+            let result = engine.evaluate_and_transform(&snapshot, &mut log).unwrap();
             match result {
                 EvaluateResult::RateLimit { allowed: true, .. } => allowed_count += 1,
                 EvaluateResult::RateLimit { allowed: false, .. } => rejected_count += 1,
@@ -1800,9 +1798,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let mut log = TestLog::new().with_body("test message");
 
-        let result = engine
-            .evaluate_and_transform(&snapshot, &mut log)
-            .unwrap();
+        let result = engine.evaluate_and_transform(&snapshot, &mut log).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Keep {
@@ -1843,9 +1839,7 @@ mod tests {
             .with_body("login attempt")
             .with_log_attr("password", "secret123");
 
-        let result = engine
-            .evaluate_and_transform(&snapshot, &mut log)
-            .unwrap();
+        let result = engine.evaluate_and_transform(&snapshot, &mut log).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Keep {
@@ -1889,9 +1883,7 @@ mod tests {
             .with_body("payment received")
             .with_log_attr("body", "card 4111 2222 3333 4444 ok");
 
-        let result = engine
-            .evaluate_and_transform(&snapshot, &mut log)
-            .unwrap();
+        let result = engine.evaluate_and_transform(&snapshot, &mut log).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Keep {
@@ -1934,9 +1926,7 @@ mod tests {
             .with_body("payment received")
             .with_log_attr("body", "no digits here");
 
-        let result = engine
-            .evaluate_and_transform(&snapshot, &mut log)
-            .unwrap();
+        let result = engine.evaluate_and_transform(&snapshot, &mut log).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Keep {
@@ -1978,9 +1968,7 @@ mod tests {
             .with_log_attr("debug_info", "internal data")
             .with_log_attr("user_id", "12345");
 
-        let result = engine
-            .evaluate_and_transform(&snapshot, &mut log)
-            .unwrap();
+        let result = engine.evaluate_and_transform(&snapshot, &mut log).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Keep {
@@ -2023,9 +2011,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let mut log = TestLog::new().with_body("event occurred");
 
-        let result = engine
-            .evaluate_and_transform(&snapshot, &mut log)
-            .unwrap();
+        let result = engine.evaluate_and_transform(&snapshot, &mut log).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Keep {
@@ -2068,9 +2054,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let mut log = TestLog::new().with_body("debug message");
 
-        let result = engine
-            .evaluate_and_transform(&snapshot, &mut log)
-            .unwrap();
+        let result = engine.evaluate_and_transform(&snapshot, &mut log).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Drop {
@@ -2125,9 +2109,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let mut log = TestLog::new().with_body("test message");
 
-        let result = engine
-            .evaluate_and_transform(&snapshot, &mut log)
-            .unwrap();
+        let result = engine.evaluate_and_transform(&snapshot, &mut log).unwrap();
         // One policy wins, but both transforms are applied
         match result {
             EvaluateResult::Keep { transformed, .. } => {
@@ -2173,9 +2155,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let mut log = TestLog::new().with_body("test message");
 
-        let result = engine
-            .evaluate_and_transform(&snapshot, &mut log)
-            .unwrap();
+        let result = engine.evaluate_and_transform(&snapshot, &mut log).unwrap();
         // Transform attempted but failed (field doesn't exist), so transformed=false
         assert_eq!(
             result,
@@ -2224,9 +2204,7 @@ mod tests {
             .with_log_attr("temp", "temporary")
             .with_log_attr("secret", "password123");
 
-        let result = engine
-            .evaluate_and_transform(&snapshot, &mut log)
-            .unwrap();
+        let result = engine.evaluate_and_transform(&snapshot, &mut log).unwrap();
         assert!(matches!(
             result,
             EvaluateResult::Keep {
@@ -2277,9 +2255,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let mut log = TestLog::new().with_body("test message");
 
-        let result = engine
-            .evaluate_and_transform(&snapshot, &mut log)
-            .unwrap();
+        let result = engine.evaluate_and_transform(&snapshot, &mut log).unwrap();
         // No transforms succeeded
         assert!(matches!(
             result,
@@ -2324,9 +2300,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let mut log = TestLog::new().with_body("test message");
 
-        let result = engine
-            .evaluate_and_transform(&snapshot, &mut log)
-            .unwrap();
+        let result = engine.evaluate_and_transform(&snapshot, &mut log).unwrap();
         assert!(matches!(result, EvaluateResult::Drop { .. }));
 
         // Transform was NOT applied, so no stats should be recorded
@@ -2364,9 +2338,7 @@ mod tests {
         // Run evaluation multiple times
         for _ in 0..5 {
             let mut log = TestLog::new().with_body("test message");
-            engine
-                .evaluate_and_transform(&snapshot, &mut log)
-                .unwrap();
+            engine.evaluate_and_transform(&snapshot, &mut log).unwrap();
         }
 
         // Check stats accumulated
@@ -3882,9 +3854,7 @@ mod tests {
             .with_name("test-span")
             .with_trace_id(&trace_id_with_randomness(high_randomness));
 
-        let result = engine
-            .evaluate_trace(&snapshot, &mut span_keep)
-            .unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span_keep).unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => {
                 assert!(keep, "High randomness should be kept");
@@ -3902,9 +3872,7 @@ mod tests {
             .with_name("test-span")
             .with_trace_id(&trace_id_with_randomness(low_randomness));
 
-        let result = engine
-            .evaluate_trace(&snapshot, &mut span_drop)
-            .unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span_drop).unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => {
                 assert!(!keep, "Low randomness should be dropped");
@@ -4980,9 +4948,7 @@ mod tests {
             .with_name("test")
             .with_trace_id(&trace_id_with_randomness(t_o + 1))
             .with_tracestate(&tracestate);
-        let result = engine
-            .evaluate_trace(&snapshot, &mut span_keep)
-            .unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span_keep).unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => {
                 assert!(keep);
@@ -4998,9 +4964,7 @@ mod tests {
             .with_name("test")
             .with_trace_id(&trace_id_with_randomness(t_o.saturating_sub(1)))
             .with_tracestate(&tracestate);
-        let result = engine
-            .evaluate_trace(&snapshot, &mut span_drop)
-            .unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span_drop).unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => assert!(!keep),
             _ => panic!("expected Sample, got {:?}", result),
@@ -5826,9 +5790,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let mut log = TestLog::new().with_body("hello");
 
-        let result = engine
-            .evaluate_and_transform(&snapshot, &mut log)
-            .unwrap();
+        let result = engine.evaluate_and_transform(&snapshot, &mut log).unwrap();
         match result {
             EvaluateResult::Keep { transformed, .. } => assert!(transformed),
             _ => panic!("expected Keep result"),
