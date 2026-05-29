@@ -161,7 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("BEFORE:");
     print_log(&log1);
 
-    let result1 = engine.evaluate_and_transform(&snapshot, &mut log1).await?;
+    let result1 = engine.evaluate_and_transform(&snapshot, &mut log1)?;
 
     println!("\nAFTER:");
     print_log(&log1);
@@ -177,7 +177,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("BEFORE:");
     print_log(&log2);
 
-    let result2 = engine.evaluate_and_transform(&snapshot, &mut log2).await?;
+    let result2 = engine.evaluate_and_transform(&snapshot, &mut log2)?;
 
     println!("\nAFTER:");
     print_log(&log2);
@@ -193,7 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("BEFORE:");
     print_log(&log3);
 
-    let result3 = engine.evaluate_and_transform(&snapshot, &mut log3).await?;
+    let result3 = engine.evaluate_and_transform(&snapshot, &mut log3)?;
 
     println!("\nAFTER:");
     print_log(&log3);
@@ -254,15 +254,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     print_log(&log_for_eval);
 
     // evaluate() - reads the log but does NOT modify it
-    let result_eval = engine.evaluate(&snapshot, &log_for_eval).await?;
+    let result_eval = engine.evaluate(&snapshot, &log_for_eval)?;
     println!("\nevaluate() result: {:?}", result_eval);
     println!("Log after evaluate() (unchanged):");
     print_log(&log_for_eval);
 
     // evaluate_and_transform() - reads AND modifies the log
     let result_transform = engine
-        .evaluate_and_transform(&snapshot, &mut log_for_transform)
-        .await?;
+        .evaluate_and_transform(&snapshot, &mut log_for_transform)?;
     println!("\nevaluate_and_transform() result: {:?}", result_transform);
     println!("Log after evaluate_and_transform() (transformed):");
     print_log(&log_for_transform);

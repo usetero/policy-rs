@@ -149,7 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     for log in &logs {
-        let result = engine.evaluate(&snapshot, log).await?;
+        let result = engine.evaluate(&snapshot, log)?;
         print!(
             "[{}] {}: ",
             log.severity.as_deref().unwrap_or(""),
@@ -200,7 +200,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Re-evaluate with updated policies
     println!("\n--- Evaluation After Update ---");
     for log in &logs {
-        let result = engine.evaluate(&new_snapshot, log).await?;
+        let result = engine.evaluate(&new_snapshot, log)?;
         print!(
             "[{}] {}: ",
             log.severity.as_deref().unwrap_or(""),

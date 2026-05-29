@@ -94,7 +94,7 @@ impl PolicyEngine {
     ///
     /// # Returns
     /// The evaluation result indicating what should happen to the record.
-    pub async fn evaluate<T: Matchable>(
+    pub fn evaluate<T: Matchable>(
         &self,
         snapshot: &PolicySnapshot,
         log: &T,
@@ -138,7 +138,7 @@ impl PolicyEngine {
     ///
     /// # Returns
     /// The evaluation result with the `transformed` flag set if transforms were applied.
-    pub async fn evaluate_and_transform<T: Matchable + Transformable>(
+    pub fn evaluate_and_transform<T: Matchable + Transformable>(
         &self,
         snapshot: &PolicySnapshot,
         log: &mut T,
@@ -267,7 +267,7 @@ impl PolicyEngine {
     ///
     /// The `th` value is written to `TraceFieldSelector::SamplingThreshold`, which the
     /// user's `Transformable` implementation should handle by updating the tracestate.
-    pub async fn evaluate_trace<T: Matchable<Signal = TraceSignal> + Transformable>(
+    pub fn evaluate_trace<T: Matchable<Signal = TraceSignal> + Transformable>(
         &self,
         snapshot: &PolicySnapshot,
         span: &mut T,
@@ -902,19 +902,19 @@ mod tests {
         let _engine = PolicyEngine::default();
     }
 
-    #[tokio::test]
-    async fn evaluate_no_policies_returns_no_match() {
+    #[test]
+    fn evaluate_no_policies_returns_no_match() {
         let registry = PolicyRegistry::new();
         let snapshot = registry.snapshot();
         let engine = PolicyEngine::new();
         let log = TestLog::new().with_body("test message");
 
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         assert_eq!(result, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn evaluate_no_matching_policy_returns_no_match() {
+    #[test]
+    fn evaluate_no_matching_policy_returns_no_match() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -931,12 +931,12 @@ mod tests {
         let engine = PolicyEngine::new();
         let log = TestLog::new().with_body("info message");
 
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         assert_eq!(result, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn evaluate_matching_policy_keep_all() {
+    #[test]
+    fn evaluate_matching_policy_keep_all() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -952,7 +952,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let log = TestLog::new().with_body("error occurred");
 
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Keep {
@@ -962,8 +962,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn evaluate_matching_policy_keep_none() {
+    #[test]
+    fn evaluate_matching_policy_keep_none() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -979,7 +979,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let log = TestLog::new().with_body("debug message");
 
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Drop {
@@ -988,8 +988,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn evaluate_matching_policy_sample_percentage() {
+    #[test]
+    fn evaluate_matching_policy_sample_percentage() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1005,7 +1005,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let log = TestLog::new().with_body("info message");
 
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         match result {
             EvaluateResult::Sample {
                 policy_id,
@@ -1019,8 +1019,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn evaluate_matching_policy_rate_limit_per_second() {
+    #[test]
+    fn evaluate_matching_policy_rate_limit_per_second() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1036,7 +1036,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let log = TestLog::new().with_body("any message");
 
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         match result {
             EvaluateResult::RateLimit {
                 policy_id, allowed, ..
@@ -1048,8 +1048,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn evaluate_matching_policy_rate_limit_per_minute() {
+    #[test]
+    fn evaluate_matching_policy_rate_limit_per_minute() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1065,7 +1065,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let log = TestLog::new().with_body("any message");
 
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         match result {
             EvaluateResult::RateLimit {
                 policy_id, allowed, ..
@@ -1077,8 +1077,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn evaluate_rate_limit_enforces_limit() {
+    #[test]
+    fn evaluate_rate_limit_enforces_limit() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1098,7 +1098,7 @@ mod tests {
         let mut rejected_count = 0;
         for _ in 0..10 {
             let log = TestLog::new().with_body("any message");
-            let result = engine.evaluate(&snapshot, &log).await.unwrap();
+            let result = engine.evaluate(&snapshot, &log).unwrap();
             match result {
                 EvaluateResult::RateLimit { allowed: true, .. } => allowed_count += 1,
                 EvaluateResult::RateLimit { allowed: false, .. } => rejected_count += 1,
@@ -1109,8 +1109,8 @@ mod tests {
         assert_eq!(rejected_count, 7);
     }
 
-    #[tokio::test]
-    async fn evaluate_and_transform_rate_limit_enforces_limit() {
+    #[test]
+    fn evaluate_and_transform_rate_limit_enforces_limit() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1131,7 +1131,6 @@ mod tests {
             let mut log = TestLog::new().with_body("any message");
             let result = engine
                 .evaluate_and_transform(&snapshot, &mut log)
-                .await
                 .unwrap();
             match result {
                 EvaluateResult::RateLimit { allowed: true, .. } => allowed_count += 1,
@@ -1143,8 +1142,8 @@ mod tests {
         assert_eq!(rejected_count, 7);
     }
 
-    #[tokio::test]
-    async fn evaluate_negated_matcher_disqualifies_policy() {
+    #[test]
+    fn evaluate_negated_matcher_disqualifies_policy() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1165,12 +1164,12 @@ mod tests {
 
         // Log with "error" but also "ignore" - policy should NOT match
         let log = TestLog::new().with_body("error: please ignore this");
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         assert_eq!(result, EvaluateResult::NoMatch);
 
         // Log with just "error" - policy should match
         let log2 = TestLog::new().with_body("error occurred");
-        let result2 = engine.evaluate(&snapshot, &log2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &log2).unwrap();
         assert_eq!(
             result2,
             EvaluateResult::Drop {
@@ -1179,8 +1178,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn evaluate_existence_check_field_exists() {
+    #[test]
+    fn evaluate_existence_check_field_exists() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1197,7 +1196,7 @@ mod tests {
 
         // Log with trace_id attribute
         let log = TestLog::new().with_log_attr("trace_id", "abc123");
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Keep {
@@ -1208,12 +1207,12 @@ mod tests {
 
         // Log without trace_id attribute
         let log2 = TestLog::new().with_body("no trace");
-        let result2 = engine.evaluate(&snapshot, &log2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &log2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn evaluate_existence_check_field_not_exists() {
+    #[test]
+    fn evaluate_existence_check_field_not_exists() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1230,7 +1229,7 @@ mod tests {
 
         // Log without trace_id - should match
         let log = TestLog::new().with_body("no trace");
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Drop {
@@ -1240,12 +1239,12 @@ mod tests {
 
         // Log with trace_id - should not match
         let log2 = TestLog::new().with_log_attr("trace_id", "abc123");
-        let result2 = engine.evaluate(&snapshot, &log2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &log2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn evaluate_existence_check_negated() {
+    #[test]
+    fn evaluate_existence_check_negated() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1263,7 +1262,7 @@ mod tests {
 
         // Log without debug_flag - negated "exists: true" matches
         let log = TestLog::new().with_body("test");
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Drop {
@@ -1273,7 +1272,7 @@ mod tests {
 
         // Log with debug_flag - negated "exists: true" does not match (disqualified)
         let log2 = TestLog::new().with_log_attr("debug_flag", "true");
-        let result2 = engine.evaluate(&snapshot, &log2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &log2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
@@ -1282,8 +1281,8 @@ mod tests {
     /// `exists: true` matchers. The fix is to call `field_exists` (which
     /// implementations can override) rather than `get_field(...).is_some()`,
     /// which conflates "absent" with "present but non-string."
-    #[tokio::test]
-    async fn evaluate_exists_check_on_non_string_attribute() {
+    #[test]
+    fn evaluate_exists_check_on_non_string_attribute() {
         struct NonStringAttrLog {
             string_attrs: HashMap<String, String>,
             /// Keys whose value is present but not a string (e.g. an int).
@@ -1339,7 +1338,7 @@ mod tests {
             non_string_keys,
         };
 
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Keep {
@@ -1350,8 +1349,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn evaluate_most_restrictive_policy_wins() {
+    #[test]
+    fn evaluate_most_restrictive_policy_wins() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1374,7 +1373,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let log = TestLog::new().with_body("test message");
 
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         // "none" is more restrictive than "all", so drop-all should win
         assert_eq!(
             result,
@@ -1384,8 +1383,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn evaluate_percentage_more_restrictive_than_all() {
+    #[test]
+    fn evaluate_percentage_more_restrictive_than_all() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1407,7 +1406,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let log = TestLog::new().with_body("test");
 
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         // 10% sampling is more restrictive than all
         match result {
             EvaluateResult::Sample { policy_id, .. } => {
@@ -1417,8 +1416,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn evaluate_disabled_policy_skipped() {
+    #[test]
+    fn evaluate_disabled_policy_skipped() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1434,12 +1433,12 @@ mod tests {
         let engine = PolicyEngine::new();
         let log = TestLog::new().with_body("test message");
 
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         assert_eq!(result, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn evaluate_multiple_matchers_all_must_match() {
+    #[test]
+    fn evaluate_multiple_matchers_all_must_match() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1462,21 +1461,21 @@ mod tests {
         let log1 = TestLog::new()
             .with_body("error occurred")
             .with_severity("INFO");
-        let result1 = engine.evaluate(&snapshot, &log1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &log1).unwrap();
         assert_eq!(result1, EvaluateResult::NoMatch);
 
         // Only severity matches - no match
         let log2 = TestLog::new()
             .with_body("info message")
             .with_severity("ERROR");
-        let result2 = engine.evaluate(&snapshot, &log2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &log2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
 
         // Both match - should match
         let log3 = TestLog::new()
             .with_body("error occurred")
             .with_severity("ERROR");
-        let result3 = engine.evaluate(&snapshot, &log3).await.unwrap();
+        let result3 = engine.evaluate(&snapshot, &log3).unwrap();
         assert_eq!(
             result3,
             EvaluateResult::Drop {
@@ -1485,8 +1484,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn evaluate_exact_match() {
+    #[test]
+    fn evaluate_exact_match() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1503,7 +1502,7 @@ mod tests {
 
         // Exact match
         let log1 = TestLog::new().with_body("exact message");
-        let result1 = engine.evaluate(&snapshot, &log1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &log1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -1513,17 +1512,17 @@ mod tests {
 
         // Partial match - should not match
         let log2 = TestLog::new().with_body("exact message with more");
-        let result2 = engine.evaluate(&snapshot, &log2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &log2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
 
         // Substring - should not match
         let log3 = TestLog::new().with_body("the exact message");
-        let result3 = engine.evaluate(&snapshot, &log3).await.unwrap();
+        let result3 = engine.evaluate(&snapshot, &log3).unwrap();
         assert_eq!(result3, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn evaluate_log_attribute_matcher() {
+    #[test]
+    fn evaluate_log_attribute_matcher() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1540,7 +1539,7 @@ mod tests {
 
         // Matching attribute
         let log1 = TestLog::new().with_log_attr("service", "nginx-proxy");
-        let result1 = engine.evaluate(&snapshot, &log1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &log1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -1550,17 +1549,17 @@ mod tests {
 
         // Non-matching attribute
         let log2 = TestLog::new().with_log_attr("service", "apache");
-        let result2 = engine.evaluate(&snapshot, &log2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &log2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
 
         // Missing attribute
         let log3 = TestLog::new().with_body("no service attr");
-        let result3 = engine.evaluate(&snapshot, &log3).await.unwrap();
+        let result3 = engine.evaluate(&snapshot, &log3).unwrap();
         assert_eq!(result3, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn evaluate_stats_recorded() {
+    #[test]
+    fn evaluate_stats_recorded() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1577,11 +1576,11 @@ mod tests {
 
         // Matching log - should record hit
         let log1 = TestLog::new().with_body("error occurred");
-        engine.evaluate(&snapshot, &log1).await.unwrap();
+        engine.evaluate(&snapshot, &log1).unwrap();
 
         // Non-matching log - per spec, no counter change (matchers didn't fire)
         let log2 = TestLog::new().with_body("info message");
-        engine.evaluate(&snapshot, &log2).await.unwrap();
+        engine.evaluate(&snapshot, &log2).unwrap();
 
         // Check stats: 1 hit from the match, 0 misses (non-match = no counter change)
         let entry = snapshot.get("stats-test").unwrap();
@@ -1589,8 +1588,8 @@ mod tests {
         assert_eq!(entry.stats.misses(), 0);
     }
 
-    #[tokio::test]
-    async fn evaluate_stats_drop_overrides_keep() {
+    #[test]
+    fn evaluate_stats_drop_overrides_keep() {
         // Spec example: keep-all policy matched but drop-all wins → keep-all gets miss
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
@@ -1614,7 +1613,7 @@ mod tests {
 
         // Both policies match, but drop-health wins (more restrictive)
         let log = TestLog::new().with_body("health check ok");
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Drop {
@@ -1633,8 +1632,8 @@ mod tests {
         assert_eq!(keep_entry.stats.misses(), 1);
     }
 
-    #[tokio::test]
-    async fn evaluate_stats_all_kept() {
+    #[test]
+    fn evaluate_stats_all_kept() {
         // When record is kept, all matching policies get a hit
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
@@ -1657,7 +1656,7 @@ mod tests {
         let engine = PolicyEngine::new();
 
         let log = TestLog::new().with_body("test message");
-        engine.evaluate(&snapshot, &log).await.unwrap();
+        engine.evaluate(&snapshot, &log).unwrap();
 
         let entry_a = snapshot.get("keep-a").unwrap();
         assert_eq!(entry_a.stats.hits(), 1);
@@ -1668,8 +1667,8 @@ mod tests {
         assert_eq!(entry_b.stats.misses(), 0);
     }
 
-    #[tokio::test]
-    async fn evaluate_stats_non_matching_unchanged() {
+    #[test]
+    fn evaluate_stats_non_matching_unchanged() {
         // Non-matching policies should have no counter change
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
@@ -1692,7 +1691,7 @@ mod tests {
         let engine = PolicyEngine::new();
 
         let log = TestLog::new().with_body("error occurred");
-        engine.evaluate(&snapshot, &log).await.unwrap();
+        engine.evaluate(&snapshot, &log).unwrap();
 
         // matches: hit
         let entry = snapshot.get("matches").unwrap();
@@ -1705,8 +1704,8 @@ mod tests {
         assert_eq!(entry.stats.misses(), 0);
     }
 
-    #[tokio::test]
-    async fn evaluate_missing_field_does_not_match() {
+    #[test]
+    fn evaluate_missing_field_does_not_match() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1723,7 +1722,7 @@ mod tests {
 
         // Log without body field
         let log = TestLog::new().with_severity("ERROR");
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         assert_eq!(result, EvaluateResult::NoMatch);
     }
 
@@ -1736,8 +1735,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn evaluate_resource_attribute_matcher() {
+    #[test]
+    fn evaluate_resource_attribute_matcher() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1760,7 +1759,7 @@ mod tests {
         let log1 = TestLog::new()
             .with_body("test")
             .with_resource_attr("service.name", "my-service-prod");
-        let result1 = engine.evaluate(&snapshot, &log1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &log1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -1772,19 +1771,19 @@ mod tests {
         let log2 = TestLog::new()
             .with_body("test")
             .with_resource_attr("service.name", "other-service");
-        let result2 = engine.evaluate(&snapshot, &log2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &log2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
 
         // Missing resource attribute
         let log3 = TestLog::new().with_body("test");
-        let result3 = engine.evaluate(&snapshot, &log3).await.unwrap();
+        let result3 = engine.evaluate(&snapshot, &log3).unwrap();
         assert_eq!(result3, EvaluateResult::NoMatch);
     }
 
     // Transform tests
 
-    #[tokio::test]
-    async fn evaluate_and_transform_no_transform() {
+    #[test]
+    fn evaluate_and_transform_no_transform() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1803,7 +1802,6 @@ mod tests {
 
         let result = engine
             .evaluate_and_transform(&snapshot, &mut log)
-            .await
             .unwrap();
         assert_eq!(
             result,
@@ -1816,8 +1814,8 @@ mod tests {
         assert_eq!(log.body, Some("test message".to_string()));
     }
 
-    #[tokio::test]
-    async fn evaluate_and_transform_redact_attribute() {
+    #[test]
+    fn evaluate_and_transform_redact_attribute() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1847,7 +1845,6 @@ mod tests {
 
         let result = engine
             .evaluate_and_transform(&snapshot, &mut log)
-            .await
             .unwrap();
         assert_eq!(
             result,
@@ -1863,8 +1860,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn evaluate_and_transform_redact_attribute_with_regex() {
+    #[test]
+    fn evaluate_and_transform_redact_attribute_with_regex() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1894,7 +1891,6 @@ mod tests {
 
         let result = engine
             .evaluate_and_transform(&snapshot, &mut log)
-            .await
             .unwrap();
         assert_eq!(
             result,
@@ -1909,8 +1905,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn evaluate_and_transform_redact_regex_no_match_leaves_value_unchanged() {
+    #[test]
+    fn evaluate_and_transform_redact_regex_no_match_leaves_value_unchanged() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1940,7 +1936,6 @@ mod tests {
 
         let result = engine
             .evaluate_and_transform(&snapshot, &mut log)
-            .await
             .unwrap();
         assert_eq!(
             result,
@@ -1955,8 +1950,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn evaluate_and_transform_remove_field() {
+    #[test]
+    fn evaluate_and_transform_remove_field() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -1985,7 +1980,6 @@ mod tests {
 
         let result = engine
             .evaluate_and_transform(&snapshot, &mut log)
-            .await
             .unwrap();
         assert_eq!(
             result,
@@ -2002,8 +1996,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn evaluate_and_transform_add_field() {
+    #[test]
+    fn evaluate_and_transform_add_field() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -2031,7 +2025,6 @@ mod tests {
 
         let result = engine
             .evaluate_and_transform(&snapshot, &mut log)
-            .await
             .unwrap();
         assert_eq!(
             result,
@@ -2047,8 +2040,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn evaluate_and_transform_no_transform_on_drop() {
+    #[test]
+    fn evaluate_and_transform_no_transform_on_drop() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -2077,7 +2070,6 @@ mod tests {
 
         let result = engine
             .evaluate_and_transform(&snapshot, &mut log)
-            .await
             .unwrap();
         assert_eq!(
             result,
@@ -2089,8 +2081,8 @@ mod tests {
         assert!(!log.log_attributes.contains_key("should_not_exist"));
     }
 
-    #[tokio::test]
-    async fn evaluate_and_transform_multiple_policies_all_transforms_applied() {
+    #[test]
+    fn evaluate_and_transform_multiple_policies_all_transforms_applied() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -2135,7 +2127,6 @@ mod tests {
 
         let result = engine
             .evaluate_and_transform(&snapshot, &mut log)
-            .await
             .unwrap();
         // One policy wins, but both transforms are applied
         match result {
@@ -2155,8 +2146,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn evaluate_and_transform_nonexistent_field_not_transformed() {
+    #[test]
+    fn evaluate_and_transform_nonexistent_field_not_transformed() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -2184,7 +2175,6 @@ mod tests {
 
         let result = engine
             .evaluate_and_transform(&snapshot, &mut log)
-            .await
             .unwrap();
         // Transform attempted but failed (field doesn't exist), so transformed=false
         assert_eq!(
@@ -2196,8 +2186,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn evaluate_and_transform_records_stats_on_success() {
+    #[test]
+    fn evaluate_and_transform_records_stats_on_success() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -2236,7 +2226,6 @@ mod tests {
 
         let result = engine
             .evaluate_and_transform(&snapshot, &mut log)
-            .await
             .unwrap();
         assert!(matches!(
             result,
@@ -2256,8 +2245,8 @@ mod tests {
         assert_eq!(entry.stats.add.misses(), 0);
     }
 
-    #[tokio::test]
-    async fn evaluate_and_transform_records_stats_on_miss() {
+    #[test]
+    fn evaluate_and_transform_records_stats_on_miss() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -2290,7 +2279,6 @@ mod tests {
 
         let result = engine
             .evaluate_and_transform(&snapshot, &mut log)
-            .await
             .unwrap();
         // No transforms succeeded
         assert!(matches!(
@@ -2309,8 +2297,8 @@ mod tests {
         assert_eq!(entry.stats.redact.misses(), 1);
     }
 
-    #[tokio::test]
-    async fn evaluate_and_transform_no_stats_on_drop() {
+    #[test]
+    fn evaluate_and_transform_no_stats_on_drop() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -2338,7 +2326,6 @@ mod tests {
 
         let result = engine
             .evaluate_and_transform(&snapshot, &mut log)
-            .await
             .unwrap();
         assert!(matches!(result, EvaluateResult::Drop { .. }));
 
@@ -2348,8 +2335,8 @@ mod tests {
         assert_eq!(entry.stats.add.misses(), 0);
     }
 
-    #[tokio::test]
-    async fn evaluate_and_transform_stats_accumulate() {
+    #[test]
+    fn evaluate_and_transform_stats_accumulate() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -2379,7 +2366,6 @@ mod tests {
             let mut log = TestLog::new().with_body("test message");
             engine
                 .evaluate_and_transform(&snapshot, &mut log)
-                .await
                 .unwrap();
         }
 
@@ -2397,8 +2383,8 @@ mod tests {
         assert_eq!(entry.stats.add.hits(), 0);
     }
 
-    #[tokio::test]
-    async fn evaluate_with_sample_key_is_consistent() {
+    #[test]
+    fn evaluate_with_sample_key_is_consistent() {
         use crate::proto::tero::policy::v1::{LogSampleKey, log_sample_key};
 
         let registry = PolicyRegistry::new();
@@ -2449,7 +2435,7 @@ mod tests {
 
         let mut results = Vec::new();
         for _ in 0..5 {
-            let result = engine.evaluate(&snapshot, &log).await.unwrap();
+            let result = engine.evaluate(&snapshot, &log).unwrap();
             if let EvaluateResult::Sample { keep, .. } = result {
                 results.push(keep);
             }
@@ -2464,8 +2450,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn evaluate_without_sample_key_field_falls_back_to_keep() {
+    #[test]
+    fn evaluate_without_sample_key_field_falls_back_to_keep() {
         use crate::proto::tero::policy::v1::{LogSampleKey, log_sample_key};
 
         let registry = PolicyRegistry::new();
@@ -2512,13 +2498,13 @@ mod tests {
         // Log without the sample key field - per OTel spec, falls back to keep
         let log = TestLog::new().with_body("test");
 
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         // Missing sample key value → always keep (per Go conformance)
         assert!(matches!(result, EvaluateResult::Sample { keep: true, .. }));
     }
 
-    #[tokio::test]
-    async fn log_evaluate_resource_schema_url() {
+    #[test]
+    fn log_evaluate_resource_schema_url() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -2537,7 +2523,7 @@ mod tests {
         let log1 = TestLog::new()
             .with_body("test")
             .with_resource_schema_url("https://old-schema/1.0");
-        let result1 = engine.evaluate(&snapshot, &log1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &log1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -2549,12 +2535,12 @@ mod tests {
         let log2 = TestLog::new()
             .with_body("test")
             .with_resource_schema_url("https://new-schema/2.0");
-        let result2 = engine.evaluate(&snapshot, &log2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &log2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn log_evaluate_scope_schema_url() {
+    #[test]
+    fn log_evaluate_scope_schema_url() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -2573,7 +2559,7 @@ mod tests {
         let log1 = TestLog::new()
             .with_body("test")
             .with_scope_schema_url("https://old-scope/1.0");
-        let result1 = engine.evaluate(&snapshot, &log1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &log1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -2585,7 +2571,7 @@ mod tests {
         let log2 = TestLog::new()
             .with_body("test")
             .with_scope_schema_url("https://new-scope/2.0");
-        let result2 = engine.evaluate(&snapshot, &log2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &log2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
@@ -2834,19 +2820,19 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_no_policies_returns_no_match() {
+    #[test]
+    fn metric_evaluate_no_policies_returns_no_match() {
         let registry = PolicyRegistry::new();
         let snapshot = registry.snapshot();
         let engine = PolicyEngine::new();
         let metric = TestMetric::new().with_name("cpu.usage");
 
-        let result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        let result = engine.evaluate(&snapshot, &metric).unwrap();
         assert_eq!(result, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_keep_true() {
+    #[test]
+    fn metric_evaluate_keep_true() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -2862,7 +2848,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let metric = TestMetric::new().with_name("cpu.usage");
 
-        let result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        let result = engine.evaluate(&snapshot, &metric).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Keep {
@@ -2872,8 +2858,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_keep_false_drops() {
+    #[test]
+    fn metric_evaluate_keep_false_drops() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -2889,7 +2875,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let metric = TestMetric::new().with_name("cpu.usage");
 
-        let result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        let result = engine.evaluate(&snapshot, &metric).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Drop {
@@ -2898,8 +2884,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_no_match_returns_no_match() {
+    #[test]
+    fn metric_evaluate_no_match_returns_no_match() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -2915,12 +2901,12 @@ mod tests {
         let engine = PolicyEngine::new();
         let metric = TestMetric::new().with_name("memory.usage");
 
-        let result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        let result = engine.evaluate(&snapshot, &metric).unwrap();
         assert_eq!(result, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_exact_name_match() {
+    #[test]
+    fn metric_evaluate_exact_name_match() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -2937,7 +2923,7 @@ mod tests {
 
         // Exact match
         let metric1 = TestMetric::new().with_name("cpu.usage");
-        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &metric1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -2947,12 +2933,12 @@ mod tests {
 
         // Not exact — should not match
         let metric2 = TestMetric::new().with_name("cpu.usage.total");
-        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &metric2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_datapoint_attribute() {
+    #[test]
+    fn metric_evaluate_datapoint_attribute() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -2972,7 +2958,7 @@ mod tests {
         let metric1 = TestMetric::new()
             .with_name("cpu.usage")
             .with_datapoint_attr("host", "prod-web-1");
-        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &metric1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -2983,12 +2969,12 @@ mod tests {
         let metric2 = TestMetric::new()
             .with_name("cpu.usage")
             .with_datapoint_attr("host", "dev-web-1");
-        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &metric2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_resource_attribute() {
+    #[test]
+    fn metric_evaluate_resource_attribute() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3013,7 +2999,7 @@ mod tests {
         let metric = TestMetric::new()
             .with_name("cpu.usage")
             .with_resource_attr("service.name", "my-service");
-        let result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        let result = engine.evaluate(&snapshot, &metric).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Drop {
@@ -3022,8 +3008,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_metric_type_matcher() {
+    #[test]
+    fn metric_evaluate_metric_type_matcher() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3042,7 +3028,7 @@ mod tests {
         let metric1 = TestMetric::new()
             .with_name("cpu.usage")
             .with_type(MetricType::Gauge);
-        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &metric1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -3054,12 +3040,12 @@ mod tests {
         let metric2 = TestMetric::new()
             .with_name("requests.total")
             .with_type(MetricType::Sum);
-        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &metric2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_aggregation_temporality_matcher() {
+    #[test]
+    fn metric_evaluate_aggregation_temporality_matcher() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3078,7 +3064,7 @@ mod tests {
         let metric1 = TestMetric::new()
             .with_name("requests.total")
             .with_temporality(AggregationTemporality::Delta);
-        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &metric1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -3090,12 +3076,12 @@ mod tests {
         let metric2 = TestMetric::new()
             .with_name("requests.total")
             .with_temporality(AggregationTemporality::Cumulative);
-        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &metric2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_multiple_matchers_all_must_match() {
+    #[test]
+    fn metric_evaluate_multiple_matchers_all_must_match() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3117,7 +3103,7 @@ mod tests {
         let metric1 = TestMetric::new()
             .with_name("cpu.usage")
             .with_type(MetricType::Gauge);
-        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &metric1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -3129,19 +3115,19 @@ mod tests {
         let metric2 = TestMetric::new()
             .with_name("cpu.usage")
             .with_type(MetricType::Sum);
-        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &metric2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
 
         // Only type matches
         let metric3 = TestMetric::new()
             .with_name("memory.usage")
             .with_type(MetricType::Gauge);
-        let result3 = engine.evaluate(&snapshot, &metric3).await.unwrap();
+        let result3 = engine.evaluate(&snapshot, &metric3).unwrap();
         assert_eq!(result3, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_most_restrictive_wins() {
+    #[test]
+    fn metric_evaluate_most_restrictive_wins() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3163,7 +3149,7 @@ mod tests {
         let engine = PolicyEngine::new();
         let metric = TestMetric::new().with_name("cpu.usage");
 
-        let result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        let result = engine.evaluate(&snapshot, &metric).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Drop {
@@ -3172,8 +3158,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_disabled_policy_skipped() {
+    #[test]
+    fn metric_evaluate_disabled_policy_skipped() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3189,12 +3175,12 @@ mod tests {
         let engine = PolicyEngine::new();
         let metric = TestMetric::new().with_name("cpu.usage");
 
-        let result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        let result = engine.evaluate(&snapshot, &metric).unwrap();
         assert_eq!(result, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_scope_version() {
+    #[test]
+    fn metric_evaluate_scope_version() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3213,7 +3199,7 @@ mod tests {
         let metric1 = TestMetric::new()
             .with_name("cpu.usage")
             .with_scope_version("0.1.0");
-        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &metric1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -3225,12 +3211,12 @@ mod tests {
         let metric2 = TestMetric::new()
             .with_name("cpu.usage")
             .with_scope_version("1.0.0");
-        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &metric2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_resource_schema_url() {
+    #[test]
+    fn metric_evaluate_resource_schema_url() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3249,7 +3235,7 @@ mod tests {
         let metric1 = TestMetric::new()
             .with_name("cpu.usage")
             .with_resource_schema_url("https://old-schema/1.0");
-        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &metric1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -3261,12 +3247,12 @@ mod tests {
         let metric2 = TestMetric::new()
             .with_name("cpu.usage")
             .with_resource_schema_url("https://new-schema/2.0");
-        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &metric2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_scope_schema_url() {
+    #[test]
+    fn metric_evaluate_scope_schema_url() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3285,7 +3271,7 @@ mod tests {
         let metric1 = TestMetric::new()
             .with_name("cpu.usage")
             .with_scope_schema_url("https://old-scope/1.0");
-        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &metric1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -3297,12 +3283,12 @@ mod tests {
         let metric2 = TestMetric::new()
             .with_name("cpu.usage")
             .with_scope_schema_url("https://new-scope/2.0");
-        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &metric2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn mixed_log_and_metric_policies_signal_isolation() {
+    #[test]
+    fn mixed_log_and_metric_policies_signal_isolation() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3326,7 +3312,7 @@ mod tests {
 
         // Log with "error" — should match log policy
         let log = TestLog::new().with_body("error occurred");
-        let log_result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let log_result = engine.evaluate(&snapshot, &log).unwrap();
         assert_eq!(
             log_result,
             EvaluateResult::Drop {
@@ -3336,7 +3322,7 @@ mod tests {
 
         // Metric with "cpu" — should match metric policy
         let metric = TestMetric::new().with_name("cpu.usage");
-        let metric_result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        let metric_result = engine.evaluate(&snapshot, &metric).unwrap();
         assert_eq!(
             metric_result,
             EvaluateResult::Drop {
@@ -3346,17 +3332,17 @@ mod tests {
 
         // Log without "error" — no match
         let log2 = TestLog::new().with_body("info message");
-        let log_result2 = engine.evaluate(&snapshot, &log2).await.unwrap();
+        let log_result2 = engine.evaluate(&snapshot, &log2).unwrap();
         assert_eq!(log_result2, EvaluateResult::NoMatch);
 
         // Metric without "cpu" — no match
         let metric2 = TestMetric::new().with_name("memory.usage");
-        let metric_result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        let metric_result2 = engine.evaluate(&snapshot, &metric2).unwrap();
         assert_eq!(metric_result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_negated_matcher() {
+    #[test]
+    fn metric_evaluate_negated_matcher() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3377,7 +3363,7 @@ mod tests {
 
         // CPU metric without debug — should match (drop)
         let metric1 = TestMetric::new().with_name("cpu.usage");
-        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &metric1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -3389,12 +3375,12 @@ mod tests {
         let metric2 = TestMetric::new()
             .with_name("cpu.usage")
             .with_datapoint_attr("debug", "true");
-        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &metric2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_description_matcher() {
+    #[test]
+    fn metric_evaluate_description_matcher() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3419,7 +3405,7 @@ mod tests {
         let metric1 = TestMetric::new()
             .with_name("gc.pause")
             .with_description("internal gc pause time");
-        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &metric1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -3430,12 +3416,12 @@ mod tests {
         let metric2 = TestMetric::new()
             .with_name("gc.pause")
             .with_description("garbage collection pause");
-        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &metric2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_unit_matcher() {
+    #[test]
+    fn metric_evaluate_unit_matcher() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3458,7 +3444,7 @@ mod tests {
         let metric1 = TestMetric::new()
             .with_name("request.duration")
             .with_unit("ms");
-        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &metric1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -3469,12 +3455,12 @@ mod tests {
         let metric2 = TestMetric::new()
             .with_name("request.duration")
             .with_unit("s");
-        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &metric2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn metric_evaluate_scope_name_matcher() {
+    #[test]
+    fn metric_evaluate_scope_name_matcher() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3499,7 +3485,7 @@ mod tests {
         let metric1 = TestMetric::new()
             .with_name("cpu.usage")
             .with_scope_name("otel-debug-sdk");
-        let result1 = engine.evaluate(&snapshot, &metric1).await.unwrap();
+        let result1 = engine.evaluate(&snapshot, &metric1).unwrap();
         assert_eq!(
             result1,
             EvaluateResult::Drop {
@@ -3510,7 +3496,7 @@ mod tests {
         let metric2 = TestMetric::new()
             .with_name("cpu.usage")
             .with_scope_name("otel-prod-sdk");
-        let result2 = engine.evaluate(&snapshot, &metric2).await.unwrap();
+        let result2 = engine.evaluate(&snapshot, &metric2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
@@ -3800,19 +3786,19 @@ mod tests {
         format!("{:018x}{:014x}", 0u64, randomness)
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_no_policies_returns_no_match() {
+    #[test]
+    fn trace_evaluate_no_policies_returns_no_match() {
         let registry = PolicyRegistry::new();
         let snapshot = registry.snapshot();
         let engine = PolicyEngine::new();
         let mut span = TestSpan::new().with_name("GET /api/users");
 
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         assert_eq!(result, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_sampled_100_percent() {
+    #[test]
+    fn trace_evaluate_sampled_100_percent() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3830,7 +3816,7 @@ mod tests {
             .with_name("GET /api/users")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
 
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Keep {
@@ -3842,8 +3828,8 @@ mod tests {
         assert_eq!(span.th_value, Some("0".to_string()));
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_not_sampled_0_percent() {
+    #[test]
+    fn trace_evaluate_not_sampled_0_percent() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3861,7 +3847,7 @@ mod tests {
             .with_name("GET /api/users")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
 
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Drop {
@@ -3872,8 +3858,8 @@ mod tests {
         assert_eq!(span.th_value, None);
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_partial_sampling_with_traceid() {
+    #[test]
+    fn trace_evaluate_partial_sampling_with_traceid() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3898,7 +3884,6 @@ mod tests {
 
         let result = engine
             .evaluate_trace(&snapshot, &mut span_keep)
-            .await
             .unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => {
@@ -3919,7 +3904,6 @@ mod tests {
 
         let result = engine
             .evaluate_trace(&snapshot, &mut span_drop)
-            .await
             .unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => {
@@ -3933,8 +3917,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_span_kind_matcher() {
+    #[test]
+    fn trace_evaluate_span_kind_matcher() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3955,7 +3939,7 @@ mod tests {
             .with_span_kind(SpanKind::Server)
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
 
-        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).unwrap();
         assert!(matches!(result1, EvaluateResult::Keep { .. }));
 
         // Non-matching span kind
@@ -3964,12 +3948,12 @@ mod tests {
             .with_span_kind(SpanKind::Client)
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
 
-        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_span_status_matcher() {
+    #[test]
+    fn trace_evaluate_span_status_matcher() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -3989,7 +3973,7 @@ mod tests {
             .with_span_status(SpanStatusCode::Error)
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
 
-        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).unwrap();
         assert!(matches!(result1, EvaluateResult::Keep { .. }));
 
         let mut span2 = TestSpan::new()
@@ -3997,12 +3981,12 @@ mod tests {
             .with_span_status(SpanStatusCode::Ok)
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
 
-        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_span_attribute() {
+    #[test]
+    fn trace_evaluate_span_attribute() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4022,7 +4006,7 @@ mod tests {
             .with_span_attr("http.method", "GET")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
 
-        let result = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span1).unwrap();
         assert!(matches!(result, EvaluateResult::Keep { .. }));
 
         let mut span2 = TestSpan::new()
@@ -4030,12 +4014,12 @@ mod tests {
             .with_span_attr("http.method", "DELETE")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
 
-        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_writes_th_to_tracestate() {
+    #[test]
+    fn trace_evaluate_writes_th_to_tracestate() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4057,7 +4041,7 @@ mod tests {
             .with_name("test")
             .with_trace_id(&trace_id_with_randomness(threshold + 1000));
 
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         match result {
             EvaluateResult::Sample { keep, .. } => {
                 assert!(keep);
@@ -4071,8 +4055,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_uses_tracestate_rv_over_traceid() {
+    #[test]
+    fn trace_evaluate_uses_tracestate_rv_over_traceid() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4098,7 +4082,7 @@ mod tests {
             .with_trace_id(&trace_id_with_randomness(0)) // low randomness (would be dropped)
             .with_tracestate(&tracestate);
 
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         match result {
             EvaluateResult::Sample { keep, .. } => {
                 assert!(keep, "Should use tracestate rv (high) over trace_id (low)");
@@ -4107,8 +4091,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_multiple_matchers_and_logic() {
+    #[test]
+    fn trace_evaluate_multiple_matchers_and_logic() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4132,7 +4116,7 @@ mod tests {
             .with_name("GET /users")
             .with_span_kind(SpanKind::Server)
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).unwrap();
         assert!(matches!(result1, EvaluateResult::Keep { .. }));
 
         // Only name matches
@@ -4140,7 +4124,7 @@ mod tests {
             .with_name("GET /users")
             .with_span_kind(SpanKind::Client)
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
 
         // Only span kind matches
@@ -4148,12 +4132,12 @@ mod tests {
             .with_name("POST /users")
             .with_span_kind(SpanKind::Server)
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result3 = engine.evaluate_trace(&snapshot, &mut span3).await.unwrap();
+        let result3 = engine.evaluate_trace(&snapshot, &mut span3).unwrap();
         assert_eq!(result3, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_most_restrictive_wins() {
+    #[test]
+    fn trace_evaluate_most_restrictive_wins() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4178,7 +4162,7 @@ mod tests {
             .with_name("test")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
 
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         // 10% is more restrictive than 100%
         match result {
             EvaluateResult::Sample {
@@ -4193,8 +4177,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_negated_matcher() {
+    #[test]
+    fn trace_evaluate_negated_matcher() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4217,19 +4201,19 @@ mod tests {
         let mut span1 = TestSpan::new()
             .with_name("GET /api/users")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).unwrap();
         assert!(matches!(result1, EvaluateResult::Keep { .. }));
 
         // Health span is disqualified
         let mut span2 = TestSpan::new()
             .with_name("GET /health")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_fail_closed_no_randomness() {
+    #[test]
+    fn trace_evaluate_fail_closed_no_randomness() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4250,7 +4234,7 @@ mod tests {
         // Span with no trace_id and no tracestate — no randomness available
         let mut span = TestSpan::new().with_name("test");
 
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Drop {
@@ -4259,8 +4243,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_fail_open_no_randomness() {
+    #[test]
+    fn trace_evaluate_fail_open_no_randomness() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4281,7 +4265,7 @@ mod tests {
         // Span with no trace_id and no tracestate
         let mut span = TestSpan::new().with_name("test");
 
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         assert_eq!(
             result,
             EvaluateResult::Keep {
@@ -4291,8 +4275,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn mixed_log_metric_trace_signal_isolation() {
+    #[test]
+    fn mixed_log_metric_trace_signal_isolation() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4341,29 +4325,29 @@ mod tests {
 
         // Log evaluation — only log policy should match
         let log = TestLog::new().with_body("error occurred");
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         assert!(matches!(result, EvaluateResult::Drop { .. }));
 
         // Metric evaluation — only metric policy should match
         let metric = TestMetric::new().with_name("cpu.usage");
-        let result = engine.evaluate(&snapshot, &metric).await.unwrap();
+        let result = engine.evaluate(&snapshot, &metric).unwrap();
         assert!(matches!(result, EvaluateResult::Drop { .. }));
 
         // Trace evaluation — only trace policy should match
         let mut span = TestSpan::new()
             .with_name("GET /api")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         assert!(matches!(result, EvaluateResult::Keep { .. }));
 
         // Cross-signal isolation: trace span should NOT match log/metric policies
         let mut span2 = TestSpan::new().with_name("error"); // matches log pattern but this is a trace
-        let result = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span2).unwrap();
         assert_eq!(result, EvaluateResult::NoMatch); // "error" doesn't match "GET.*"
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_event_name_matcher() {
+    #[test]
+    fn trace_evaluate_event_name_matcher() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4383,7 +4367,7 @@ mod tests {
             .with_name("GET /api")
             .with_event_name("exception")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).unwrap();
         assert!(matches!(result1, EvaluateResult::Drop { .. }));
 
         // Span with different event — should not match
@@ -4391,19 +4375,19 @@ mod tests {
             .with_name("GET /api")
             .with_event_name("db_query")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
 
         // Span with no event — should not match
         let mut span3 = TestSpan::new()
             .with_name("GET /api")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result3 = engine.evaluate_trace(&snapshot, &mut span3).await.unwrap();
+        let result3 = engine.evaluate_trace(&snapshot, &mut span3).unwrap();
         assert_eq!(result3, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_scope_name_matcher() {
+    #[test]
+    fn trace_evaluate_scope_name_matcher() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4423,7 +4407,7 @@ mod tests {
             .with_name("GET /api")
             .with_scope_name("otel-debug-sdk")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).unwrap();
         assert!(matches!(result1, EvaluateResult::Drop { .. }));
 
         // Different scope name — should not match
@@ -4431,12 +4415,12 @@ mod tests {
             .with_name("GET /api")
             .with_scope_name("otel-prod-sdk")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_scope_version_matcher() {
+    #[test]
+    fn trace_evaluate_scope_version_matcher() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4463,7 +4447,7 @@ mod tests {
             .with_name("GET /api")
             .with_scope_version("0.1.0")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).unwrap();
         assert!(matches!(result1, EvaluateResult::Drop { .. }));
 
         // Different version — should not match
@@ -4471,12 +4455,12 @@ mod tests {
             .with_name("GET /api")
             .with_scope_version("1.0.0")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_resource_schema_url() {
+    #[test]
+    fn trace_evaluate_resource_schema_url() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4496,7 +4480,7 @@ mod tests {
             .with_name("GET /api")
             .with_resource_schema_url("https://old-schema/1.0")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).unwrap();
         assert!(matches!(result1, EvaluateResult::Drop { .. }));
 
         // Different schema URL — should not match
@@ -4504,12 +4488,12 @@ mod tests {
             .with_name("GET /api")
             .with_resource_schema_url("https://new-schema/2.0")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_scope_schema_url() {
+    #[test]
+    fn trace_evaluate_scope_schema_url() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4529,7 +4513,7 @@ mod tests {
             .with_name("GET /api")
             .with_scope_schema_url("https://old-scope/1.0")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).unwrap();
         assert!(matches!(result1, EvaluateResult::Drop { .. }));
 
         // Different scope schema URL — should not match
@@ -4537,12 +4521,12 @@ mod tests {
             .with_name("GET /api")
             .with_scope_schema_url("https://new-scope/2.0")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
     }
 
-    #[tokio::test]
-    async fn trace_evaluate_span_status_unspecified() {
+    #[test]
+    fn trace_evaluate_span_status_unspecified() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4562,7 +4546,7 @@ mod tests {
             .with_name("GET /api")
             .with_span_status(SpanStatusCode::Unspecified)
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result1 = engine.evaluate_trace(&snapshot, &mut span1).await.unwrap();
+        let result1 = engine.evaluate_trace(&snapshot, &mut span1).unwrap();
         assert!(matches!(result1, EvaluateResult::Keep { .. }));
 
         // Span with Ok status — should not match
@@ -4570,14 +4554,14 @@ mod tests {
             .with_name("GET /api")
             .with_span_status(SpanStatusCode::Ok)
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result2 = engine.evaluate_trace(&snapshot, &mut span2).await.unwrap();
+        let result2 = engine.evaluate_trace(&snapshot, &mut span2).unwrap();
         assert_eq!(result2, EvaluateResult::NoMatch);
 
         // Span with no status set — should not match (field doesn't exist)
         let mut span3 = TestSpan::new()
             .with_name("GET /api")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result3 = engine.evaluate_trace(&snapshot, &mut span3).await.unwrap();
+        let result3 = engine.evaluate_trace(&snapshot, &mut span3).unwrap();
         assert_eq!(result3, EvaluateResult::NoMatch);
     }
 
@@ -4613,8 +4597,8 @@ mod tests {
 
     // ==================== HashSeed Mode Tests ====================
 
-    #[tokio::test]
-    async fn hash_seed_mode_default_seed_matches_basic_behavior() {
+    #[test]
+    fn hash_seed_mode_default_seed_matches_basic_behavior() {
         // With seed=0 (default), hash_seed mode should behave identically
         // to the original implementation (trace ID randomness directly).
         let registry = PolicyRegistry::new();
@@ -4637,7 +4621,7 @@ mod tests {
         let mut span = TestSpan::new()
             .with_name("test")
             .with_trace_id(&trace_id_with_randomness(threshold + 1));
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => assert!(keep),
             _ => panic!("expected Sample, got {:?}", result),
@@ -4647,15 +4631,15 @@ mod tests {
         let mut span = TestSpan::new()
             .with_name("test")
             .with_trace_id(&trace_id_with_randomness(threshold - 1));
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => assert!(!keep),
             _ => panic!("expected Sample, got {:?}", result),
         }
     }
 
-    #[tokio::test]
-    async fn hash_seed_mode_nonzero_seed_changes_decisions() {
+    #[test]
+    fn hash_seed_mode_nonzero_seed_changes_decisions() {
         // A non-zero seed should produce different keep/drop decisions
         // compared to seed=0 for the same trace IDs.
         let registry = PolicyRegistry::new();
@@ -4678,7 +4662,7 @@ mod tests {
         for i in 0..total {
             let trace_id = distributed_trace_id(i);
             let mut span = TestSpan::new().with_name("test").with_trace_id(&trace_id);
-            let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+            let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
             if let EvaluateResult::Sample { keep: true, .. } = result {
                 kept += 1;
             }
@@ -4691,8 +4675,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn hash_seed_mode_different_seeds_different_sets() {
+    #[test]
+    fn hash_seed_mode_different_seeds_different_sets() {
         // Two different seeds at the same percentage should keep different
         // subsets of trace IDs (with high probability).
         let trace_ids: Vec<String> = (0..500u64).map(distributed_trace_id).collect();
@@ -4715,7 +4699,7 @@ mod tests {
 
             for tid in &trace_ids {
                 let mut span = TestSpan::new().with_name("test").with_trace_id(tid);
-                let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+                let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
                 let kept = matches!(result, EvaluateResult::Sample { keep: true, .. });
                 if seed == 1 {
                     results_seed1.push(kept);
@@ -4740,8 +4724,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn hash_seed_mode_deterministic() {
+    #[test]
+    fn hash_seed_mode_deterministic() {
         // Same seed + same trace ID should always produce the same decision.
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
@@ -4761,7 +4745,7 @@ mod tests {
         let mut first_result = None;
         for _ in 0..10 {
             let mut span = TestSpan::new().with_name("test").with_trace_id(trace_id);
-            let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+            let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
             let kept = matches!(result, EvaluateResult::Sample { keep: true, .. });
             if let Some(first) = first_result {
                 assert_eq!(kept, first, "Decisions must be consistent for same input");
@@ -4771,8 +4755,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn hash_seed_mode_100_percent() {
+    #[test]
+    fn hash_seed_mode_100_percent() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4790,13 +4774,13 @@ mod tests {
         let mut span = TestSpan::new()
             .with_name("test")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         assert!(matches!(result, EvaluateResult::Keep { .. }));
         assert_eq!(span.th_value, Some("0".to_string()));
     }
 
-    #[tokio::test]
-    async fn hash_seed_mode_0_percent() {
+    #[test]
+    fn hash_seed_mode_0_percent() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4814,12 +4798,12 @@ mod tests {
         let mut span = TestSpan::new()
             .with_name("test")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         assert!(matches!(result, EvaluateResult::Drop { .. }));
     }
 
-    #[tokio::test]
-    async fn hash_seed_mode_seed_zero_uses_tracestate_rv() {
+    #[test]
+    fn hash_seed_mode_seed_zero_uses_tracestate_rv() {
         // With seed=0, the rv sub-key from tracestate should be preferred.
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
@@ -4843,7 +4827,7 @@ mod tests {
             .with_trace_id(&trace_id_with_randomness(0)) // low (would drop)
             .with_tracestate(&format!("ot=rv:{:014x}", high_rv));
 
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => {
                 assert!(
@@ -4855,8 +4839,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn hash_seed_mode_nonzero_seed_ignores_tracestate_rv() {
+    #[test]
+    fn hash_seed_mode_nonzero_seed_ignores_tracestate_rv() {
         // With non-zero seed, the rv sub-key should be ignored.
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
@@ -4882,7 +4866,7 @@ mod tests {
                 .with_name("test")
                 .with_trace_id(&trace_id)
                 .with_tracestate(&format!("ot=rv:{:014x}", high_rv));
-            let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+            let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
             if let EvaluateResult::Sample { keep: false, .. } = result {
                 dropped += 1;
             }
@@ -4894,8 +4878,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn hash_seed_mode_fail_closed_no_trace_id() {
+    #[test]
+    fn hash_seed_mode_fail_closed_no_trace_id() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -4911,14 +4895,14 @@ mod tests {
         let engine = PolicyEngine::new();
 
         let mut span = TestSpan::new().with_name("test"); // no trace_id
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         assert!(matches!(result, EvaluateResult::Drop { .. }));
     }
 
     // ==================== Proportional Mode Tests ====================
 
-    #[tokio::test]
-    async fn proportional_mode_no_incoming_th_applies_target() {
+    #[test]
+    fn proportional_mode_no_incoming_th_applies_target() {
         // Without an incoming th in tracestate, proportional mode should
         // apply the target threshold directly (same as hash_seed mode).
         let registry = PolicyRegistry::new();
@@ -4941,7 +4925,7 @@ mod tests {
         let mut span = TestSpan::new()
             .with_name("test")
             .with_trace_id(&trace_id_with_randomness(threshold + 1));
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => {
                 assert!(keep);
@@ -4954,15 +4938,15 @@ mod tests {
         let mut span = TestSpan::new()
             .with_name("test")
             .with_trace_id(&trace_id_with_randomness(threshold - 1));
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => assert!(!keep),
             _ => panic!("expected Sample, got {:?}", result),
         }
     }
 
-    #[tokio::test]
-    async fn proportional_mode_multiplies_incoming_probability() {
+    #[test]
+    fn proportional_mode_multiplies_incoming_probability() {
         // Per OTel spec: T_o = ProbabilityToThreshold(p * ThresholdToProbability(T_s))
         // With p=0.5 and incoming at 10% (T_s for 10%), the product probability
         // is 0.5 * 0.1 = 0.05, so T_o = rejection_threshold(0.05).
@@ -4998,7 +4982,6 @@ mod tests {
             .with_tracestate(&tracestate);
         let result = engine
             .evaluate_trace(&snapshot, &mut span_keep)
-            .await
             .unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => {
@@ -5017,7 +5000,6 @@ mod tests {
             .with_tracestate(&tracestate);
         let result = engine
             .evaluate_trace(&snapshot, &mut span_drop)
-            .await
             .unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => assert!(!keep),
@@ -5025,8 +5007,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn proportional_mode_reduces_by_configured_factor() {
+    #[test]
+    fn proportional_mode_reduces_by_configured_factor() {
         // Per OTel spec: T_o = ProbabilityToThreshold(p * ThresholdToProbability(T_s))
         // With p=0.1 (10%) and incoming at 50%: product = 0.1 * 0.5 = 0.05
         // So ~5% of spans should be kept.
@@ -5059,7 +5041,7 @@ mod tests {
                 .with_name("test")
                 .with_trace_id(&trace_id)
                 .with_tracestate(&tracestate);
-            let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+            let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
             if let EvaluateResult::Sample { keep: true, .. } = result {
                 kept += 1;
             }
@@ -5073,8 +5055,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn proportional_mode_100_percent_short_circuits() {
+    #[test]
+    fn proportional_mode_100_percent_short_circuits() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -5092,13 +5074,13 @@ mod tests {
         let mut span = TestSpan::new()
             .with_name("test")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         assert!(matches!(result, EvaluateResult::Keep { .. }));
         assert_eq!(span.th_value, Some("0".to_string()));
     }
 
-    #[tokio::test]
-    async fn proportional_mode_0_percent_short_circuits() {
+    #[test]
+    fn proportional_mode_0_percent_short_circuits() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -5116,12 +5098,12 @@ mod tests {
         let mut span = TestSpan::new()
             .with_name("test")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         assert!(matches!(result, EvaluateResult::Drop { .. }));
     }
 
-    #[tokio::test]
-    async fn proportional_mode_incoming_th_zero_keeps_all_at_target() {
+    #[test]
+    fn proportional_mode_incoming_th_zero_keeps_all_at_target() {
         // Incoming th=0 means incoming probability is 100%.
         // Proportional should then apply the target threshold directly.
         let registry = PolicyRegistry::new();
@@ -5147,15 +5129,15 @@ mod tests {
             .with_name("test")
             .with_trace_id(&trace_id_with_randomness(threshold + 1))
             .with_tracestate(tracestate);
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => assert!(keep),
             _ => panic!("expected Sample, got {:?}", result),
         }
     }
 
-    #[tokio::test]
-    async fn proportional_mode_fail_closed_no_randomness() {
+    #[test]
+    fn proportional_mode_fail_closed_no_randomness() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -5171,12 +5153,12 @@ mod tests {
         let engine = PolicyEngine::new();
 
         let mut span = TestSpan::new().with_name("test"); // no trace_id
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         assert!(matches!(result, EvaluateResult::Drop { .. }));
     }
 
-    #[tokio::test]
-    async fn proportional_mode_fail_open_no_randomness() {
+    #[test]
+    fn proportional_mode_fail_open_no_randomness() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -5195,12 +5177,12 @@ mod tests {
         let engine = PolicyEngine::new();
 
         let mut span = TestSpan::new().with_name("test"); // no trace_id
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         assert!(matches!(result, EvaluateResult::Keep { .. }));
     }
 
-    #[tokio::test]
-    async fn proportional_mode_writes_target_th_when_adjusting() {
+    #[test]
+    fn proportional_mode_writes_target_th_when_adjusting() {
         // When proportional mode adjusts (incoming is less restrictive),
         // the written th should be the target threshold.
         let registry = PolicyRegistry::new();
@@ -5226,7 +5208,7 @@ mod tests {
             .with_trace_id(&trace_id_with_randomness(MAX_THRESHOLD - 1))
             .with_tracestate("ot=th:0");
 
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         match &result {
             EvaluateResult::Sample { keep: true, .. } => {
                 let written_th = span.th_value.as_ref().unwrap();
@@ -5239,8 +5221,8 @@ mod tests {
 
     // ==================== Equalizing Mode Tests ====================
 
-    #[tokio::test]
-    async fn equalizing_mode_no_incoming_th_applies_target() {
+    #[test]
+    fn equalizing_mode_no_incoming_th_applies_target() {
         // Without incoming th, equalizing should apply the target threshold directly.
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
@@ -5262,7 +5244,7 @@ mod tests {
         let mut span = TestSpan::new()
             .with_name("test")
             .with_trace_id(&trace_id_with_randomness(threshold + 1));
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => assert!(keep),
             _ => panic!("expected Sample, got {:?}", result),
@@ -5272,15 +5254,15 @@ mod tests {
         let mut span = TestSpan::new()
             .with_name("test")
             .with_trace_id(&trace_id_with_randomness(threshold - 1));
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => assert!(!keep),
             _ => panic!("expected Sample, got {:?}", result),
         }
     }
 
-    #[tokio::test]
-    async fn equalizing_mode_incoming_th_more_restrictive_keeps() {
+    #[test]
+    fn equalizing_mode_incoming_th_more_restrictive_keeps() {
         // If incoming th >= target th (span already rare enough), keep it.
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
@@ -5311,7 +5293,7 @@ mod tests {
             .with_trace_id(&trace_id_with_randomness(target_th - 1))
             .with_tracestate(&tracestate);
 
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => {
                 assert!(
@@ -5323,8 +5305,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn equalizing_mode_incoming_th_less_restrictive_applies_target() {
+    #[test]
+    fn equalizing_mode_incoming_th_less_restrictive_applies_target() {
         // If incoming th < target th (span sampled at higher rate), apply target directly.
         // This is different from proportional which adjusts.
         let registry = PolicyRegistry::new();
@@ -5358,7 +5340,7 @@ mod tests {
                 .with_name("test")
                 .with_trace_id(&trace_id)
                 .with_tracestate(&tracestate);
-            let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+            let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
             if let EvaluateResult::Sample { keep: true, .. } = result {
                 kept += 1;
             }
@@ -5372,8 +5354,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn equalizing_mode_100_percent_short_circuits() {
+    #[test]
+    fn equalizing_mode_100_percent_short_circuits() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -5391,13 +5373,13 @@ mod tests {
         let mut span = TestSpan::new()
             .with_name("test")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         assert!(matches!(result, EvaluateResult::Keep { .. }));
         assert_eq!(span.th_value, Some("0".to_string()));
     }
 
-    #[tokio::test]
-    async fn equalizing_mode_0_percent_short_circuits() {
+    #[test]
+    fn equalizing_mode_0_percent_short_circuits() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -5415,12 +5397,12 @@ mod tests {
         let mut span = TestSpan::new()
             .with_name("test")
             .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         assert!(matches!(result, EvaluateResult::Drop { .. }));
     }
 
-    #[tokio::test]
-    async fn equalizing_mode_fail_closed_no_randomness() {
+    #[test]
+    fn equalizing_mode_fail_closed_no_randomness() {
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
 
@@ -5436,12 +5418,12 @@ mod tests {
         let engine = PolicyEngine::new();
 
         let mut span = TestSpan::new().with_name("test");
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         assert!(matches!(result, EvaluateResult::Drop { .. }));
     }
 
-    #[tokio::test]
-    async fn equalizing_mode_preserves_incoming_th_when_keeping_rare() {
+    #[test]
+    fn equalizing_mode_preserves_incoming_th_when_keeping_rare() {
         // When keeping a rare span, the written th should be the incoming th (not target).
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
@@ -5469,7 +5451,7 @@ mod tests {
             .with_trace_id(&trace_id_with_randomness(1)) // any randomness, rare spans always kept
             .with_tracestate(&tracestate);
 
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         match &result {
             EvaluateResult::Sample { keep: true, .. } => {
                 // The written th should be the incoming th (preserving it)
@@ -5483,8 +5465,8 @@ mod tests {
 
     // ==================== Cross-Mode Comparison Tests ====================
 
-    #[tokio::test]
-    async fn proportional_vs_equalizing_with_incoming_th() {
+    #[test]
+    fn proportional_vs_equalizing_with_incoming_th() {
         // Key difference per OTel spec:
         // - Proportional multiplies incoming probability by p:
         //   T_o = ProbabilityToThreshold(p * ThresholdToProbability(T_s))
@@ -5525,7 +5507,7 @@ mod tests {
                     .with_name("test")
                     .with_trace_id(&trace_id)
                     .with_tracestate(&tracestate);
-                let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+                let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
                 if let EvaluateResult::Sample { keep: true, .. } = result {
                     kept += 1;
                 }
@@ -5562,8 +5544,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn all_modes_agree_on_no_incoming_th() {
+    #[test]
+    fn all_modes_agree_on_no_incoming_th() {
         // Without incoming th, all three modes should produce the same
         // keep/drop decisions (all use target threshold against trace ID randomness).
         let engine = PolicyEngine::new();
@@ -5592,7 +5574,7 @@ mod tests {
             let mut results = Vec::new();
             for tid in &trace_ids {
                 let mut span = TestSpan::new().with_name("test").with_trace_id(tid);
-                let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+                let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
                 let kept = matches!(
                     result,
                     EvaluateResult::Sample { keep: true, .. } | EvaluateResult::Keep { .. }
@@ -5613,8 +5595,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn all_modes_agree_on_100_and_0_percent() {
+    #[test]
+    fn all_modes_agree_on_100_and_0_percent() {
         // All modes should short-circuit on 100% and 0%.
         for mode in [
             SamplingMode::HashSeed,
@@ -5638,7 +5620,7 @@ mod tests {
             let mut span = TestSpan::new()
                 .with_name("test")
                 .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-            let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+            let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
             assert!(
                 matches!(result, EvaluateResult::Keep { .. }),
                 "Mode {:?} should keep at 100%",
@@ -5660,7 +5642,7 @@ mod tests {
             let mut span = TestSpan::new()
                 .with_name("test")
                 .with_trace_id("0af7651916cd43dd8448eb211c80319c");
-            let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+            let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
             assert!(
                 matches!(result, EvaluateResult::Drop { .. }),
                 "Mode {:?} should drop at 0%",
@@ -5669,8 +5651,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn unspecified_mode_defaults_to_hash_seed() {
+    #[test]
+    fn unspecified_mode_defaults_to_hash_seed() {
         // SamplingMode::Unspecified should behave like HashSeed.
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
@@ -5690,15 +5672,15 @@ mod tests {
         let mut span = TestSpan::new()
             .with_name("test")
             .with_trace_id(&trace_id_with_randomness(threshold + 1));
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => assert!(keep),
             _ => panic!("expected Sample, got {:?}", result),
         }
     }
 
-    #[tokio::test]
-    async fn mode_none_defaults_to_hash_seed() {
+    #[test]
+    fn mode_none_defaults_to_hash_seed() {
         // When mode is None (not set), should behave like HashSeed.
         let registry = PolicyRegistry::new();
         let handle = registry.register_provider();
@@ -5719,15 +5701,15 @@ mod tests {
         let mut span = TestSpan::new()
             .with_name("test")
             .with_trace_id(&trace_id_with_randomness(threshold + 1));
-        let result = engine.evaluate_trace(&snapshot, &mut span).await.unwrap();
+        let result = engine.evaluate_trace(&snapshot, &mut span).unwrap();
         match &result {
             EvaluateResult::Sample { keep, .. } => assert!(keep),
             _ => panic!("expected Sample, got {:?}", result),
         }
     }
 
-    #[tokio::test]
-    async fn drop_stats_attributed_to_alphanumeric_first_policy() {
+    #[test]
+    fn drop_stats_attributed_to_alphanumeric_first_policy() {
         // ENG-228: When multiple drop policies match, the hit should be
         // attributed to the alphabetically-first policy, matching Go/Zig.
         let registry = PolicyRegistry::new();
@@ -5758,7 +5740,7 @@ mod tests {
             .with_body("verbose trace data")
             .with_severity("TRACE");
 
-        let result = engine.evaluate(&snapshot, &log).await.unwrap();
+        let result = engine.evaluate(&snapshot, &log).unwrap();
         match &result {
             EvaluateResult::Drop { policy_id } => {
                 // Alphabetically first: "drop-trace-logs" < "drop-verbose"
@@ -5797,8 +5779,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn transforms_applied_in_alphanumeric_order_by_policy_id() {
+    #[test]
+    fn transforms_applied_in_alphanumeric_order_by_policy_id() {
         // ENG-224: When multiple policies match and both upsert the same field,
         // the alphabetically-last policy should win because transforms are
         // applied in alphanumeric order by policy ID.
@@ -5846,7 +5828,6 @@ mod tests {
 
         let result = engine
             .evaluate_and_transform(&snapshot, &mut log)
-            .await
             .unwrap();
         match result {
             EvaluateResult::Keep { transformed, .. } => assert!(transformed),

@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n--- Evaluating Logs ---");
     for log in &logs {
-        let result = engine.evaluate(&snapshot, log).await?;
+        let result = engine.evaluate(&snapshot, log)?;
 
         let severity = log.severity.as_deref().unwrap_or("?");
         let body = log.body.as_deref().unwrap_or("");
