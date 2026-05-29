@@ -25,7 +25,7 @@
 //! // Create an engine and evaluate logs
 //! let engine = PolicyEngine::new();
 //! let snapshot = registry.snapshot();
-//! let result = engine.evaluate(&snapshot, &log).await?;
+//! let result = engine.evaluate(&snapshot, &log)?;
 //!
 //! match result {
 //!     EvaluateResult::Keep { policy_id, .. } => println!("Keep: {}", policy_id),

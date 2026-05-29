@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Evaluate each log
     for (i, log) in logs.iter().enumerate() {
-        let result = engine.evaluate(&snapshot, log).await?;
+        let result = engine.evaluate(&snapshot, log)?;
 
         println!(
             "\nLog {}: [{}] {}",
@@ -177,7 +177,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     for (i, metric) in metrics.iter().enumerate() {
-        let result = engine.evaluate(&metric_snapshot, metric).await?;
+        let result = engine.evaluate(&metric_snapshot, metric)?;
 
         let type_name = metric
             .metric_type
@@ -281,7 +281,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (i, span) in spans.into_iter().enumerate() {
         let mut span = span;
-        let result = engine.evaluate_trace(&trace_snapshot, &mut span).await?;
+        let result = engine.evaluate_trace(&trace_snapshot, &mut span)?;
 
         println!(
             "\nSpan {}: {} (kind={}, status={})",

@@ -106,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n--- Evaluating Logs ---");
     for (name, log) in &logs {
-        let result = engine.evaluate(&snapshot, log).await?;
+        let result = engine.evaluate(&snapshot, log)?;
         print!("{}: ", name);
         match result {
             EvaluateResult::NoMatch => println!("pass through"),

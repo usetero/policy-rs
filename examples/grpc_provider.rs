@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .client_metadata(client_metadata);
 
     // Create the provider with async initialization
-    let provider = Arc::new(GrpcProvider::new_with_initial_fetch(config).await?);
+    let provider = Arc::new(GrpcProvider::new_with_initial_fetch(config)?);
 
     // Create a registry and subscribe to the provider
     let registry = Arc::new(PolicyRegistry::new());
@@ -84,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Evaluate each log
     for (i, log) in logs.iter().enumerate() {
-        let result = engine.evaluate(&snapshot, log).await?;
+        let result = engine.evaluate(&snapshot, log)?;
 
         println!(
             "\nLog {}: [{}] {}",
