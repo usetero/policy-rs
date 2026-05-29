@@ -42,8 +42,18 @@ use crate::proto::tero::policy::v1::{
 use super::{PolicyCallback, PolicyProvider};
 
 /// A policy provider that loads policies from a JSON file.
+///
+/// By default the provider reloads via filesystem events (`notify`/FSEvents).
+/// In environments where filesystem events are unreliable — Kubernetes ConfigMap
+/// mounts (atomic symlink swaps over overlayfs), network filesystems, some
+/// container runtimes — use [`with_poll_interval`](FileProvider::with_poll_interval)
+/// to add a periodic re-read as a fallback. Reloads are deduplicated by content
+/// hash, so the poll does not fire callbacks when nothing changed.
 pub struct FileProvider {
     path: PathBuf,
+    /// If set, also poll the file every `poll_interval_secs` seconds in addition
+    /// to filesystem-event watching.
+    poll_interval_secs: Option<u64>,
 }
 
 impl FileProvider {
@@ -51,7 +61,19 @@ impl FileProvider {
     pub fn new(path: impl AsRef<Path>) -> Self {
         Self {
             path: path.as_ref().to_path_buf(),
+            poll_interval_secs: None,
         }
+    }
+
+    /// Enable periodic polling as a fallback for environments where filesystem
+    /// events are unreliable (Kubernetes ConfigMaps, network mounts, etc.).
+    ///
+    /// The file is re-read every `secs` seconds. Callbacks are only invoked
+    /// when the content hash changes, so there is no cost for unchanged files.
+    /// Filesystem-event watching continues alongside polling.
+    pub fn with_poll_interval(mut self, secs: u64) -> Self {
+        self.poll_interval_secs = Some(secs);
+        self
     }
 
     /// Load policies from the file.
@@ -88,7 +110,7 @@ impl PolicyProvider for FileProvider {
             source: e,
         })?;
         let policies = self.parse(&contents)?;
-        let mut last_hash = hash_contents(&contents);
+        let initial_hash = hash_contents(&contents);
         callback(policies);
 
         // If no tokio runtime is available, skip file watching (initial load still works).
@@ -127,7 +149,13 @@ impl PolicyProvider for FileProvider {
                 message: e.to_string(),
             })?;
 
+        // Shared last-seen hash used by both the watcher task and the poll task.
+        // Wrapped in Arc<Mutex> so both tasks can update it.
+        let last_hash = std::sync::Arc::new(std::sync::Mutex::new(initial_hash));
+
         let watch_path = path.clone();
+        let watch_hash = last_hash.clone();
+        let watch_callback = callback.clone();
         handle.spawn(async move {
             // Keep watcher alive for the lifetime of this task.
             let _watcher = watcher;
@@ -147,51 +175,34 @@ impl PolicyProvider for FileProvider {
                 }
 
                 // Filter to events affecting our file.
-                let dominated = event
+                let affected = event
                     .paths
                     .iter()
                     .any(|p| p.canonicalize().ok().as_deref() == Some(watch_path.as_path()));
-                if !dominated {
+                if !affected {
                     continue;
                 }
 
-                // Read and deduplicate by content hash.
-                let contents = match fs::read_to_string(&watch_path) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!("file watcher read error for {:?}: {}", watch_path, e);
-                        continue;
-                    }
-                };
-                let h = hash_contents(&contents);
-                if h == last_hash {
-                    continue;
-                }
-                last_hash = h;
-
-                // Parse; log and skip on error (fail-open).
-                let file: JsonPolicyFile = match serde_json::from_str(&contents) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        eprintln!("file watcher parse error for {:?}: {}", watch_path, e);
-                        continue;
-                    }
-                };
-
-                let policies: Result<Vec<Policy>, _> = file
-                    .policies
-                    .into_iter()
-                    .map(|p| p.into_proto().map(|proto| Policy { proto }))
-                    .collect();
-
-                match policies {
-                    Ok(p) => callback(p),
-                    Err(e) => {
-                        eprintln!("file watcher policy error for {:?}: {}", watch_path, e);
-                    }
-                }
+                reload_if_changed(&watch_path, &watch_hash, &watch_callback);
             }
         });
+
+        // Optional poll task — fallback for environments where filesystem events
+        // are unreliable (Kubernetes ConfigMaps, network mounts, overlay/tmpfs).
+        if let Some(interval_secs) = self.poll_interval_secs {
+            let poll_path = path.clone();
+            let poll_hash = last_hash.clone();
+            let poll_callback = callback.clone();
+            handle.spawn(async move {
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+                interval.tick().await; // skip the immediate first tick
+                loop {
+                    interval.tick().await;
+                    reload_if_changed(&poll_path, &poll_hash, &poll_callback);
+                }
+            });
+        }
 
         Ok(())
     }
@@ -207,6 +218,48 @@ impl PolicyProvider for FileProvider {
 //
 // This is achieved via `#[serde(flatten)]` on both the field and match enums.
 // =============================================================================
+
+/// Read `path`, compare its hash against `last_hash`, and invoke `callback`
+/// only when the content has changed. Updates `last_hash` on change.
+/// Logs and skips on read or parse errors (fail-open).
+fn reload_if_changed(
+    path: &std::path::Path,
+    last_hash: &std::sync::Mutex<u64>,
+    callback: &PolicyCallback,
+) {
+    let contents = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("policy file read error for {:?}: {}", path, e);
+            return;
+        }
+    };
+    let h = hash_contents(&contents);
+    {
+        let mut guard = last_hash.lock().unwrap();
+        if h == *guard {
+            return;
+        }
+        *guard = h;
+    }
+
+    let file: JsonPolicyFile = match serde_json::from_str(&contents) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("policy file parse error for {:?}: {}", path, e);
+            return;
+        }
+    };
+    let policies: Result<Vec<Policy>, _> = file
+        .policies
+        .into_iter()
+        .map(|p| p.into_proto().map(|proto| Policy { proto }))
+        .collect();
+    match policies {
+        Ok(p) => callback(p),
+        Err(e) => eprintln!("policy file policy error for {:?}: {}", path, e),
+    }
+}
 
 fn default_true() -> bool {
     true
@@ -2719,5 +2772,55 @@ mod tests {
             metric_target.r#match[0].field,
             Some(metric_matcher::Field::AggregationTemporality(v)) if v == pb::AggregationTemporality::Delta as i32
         ));
+    }
+
+    // ==================== Poll interval tests ====================
+
+    #[tokio::test]
+    async fn poll_interval_reloads_on_change() {
+        use std::sync::{Arc, Mutex};
+
+        let file = create_temp_policy_file(&one_policy_json("initial"));
+        // Use a short poll interval so the test completes quickly.
+        let provider = FileProvider::new(file.path()).with_poll_interval(1);
+
+        let log: Arc<Mutex<Vec<Vec<String>>>> = Arc::new(Mutex::new(Vec::new()));
+        let log2 = log.clone();
+        let callback: PolicyCallback = Arc::new(move |policies| {
+            let ids: Vec<String> = policies.iter().map(|p| p.id().to_string()).collect();
+            log2.lock().unwrap().push(ids);
+        });
+
+        provider.subscribe(callback).unwrap();
+        assert_eq!(log.lock().unwrap().len(), 1);
+
+        // Modify the file; the poll task should detect it within ~1s.
+        std::fs::write(file.path(), two_policy_json()).unwrap();
+        wait_for_callbacks(&log, 2).await;
+
+        let entries = log.lock().unwrap();
+        assert_eq!(entries[1].len(), 2);
+    }
+
+    #[tokio::test]
+    async fn poll_interval_skips_reload_on_identical_content() {
+        use std::sync::{Arc, Mutex};
+
+        let content = one_policy_json("unchanged");
+        let file = create_temp_policy_file(&content);
+        let provider = FileProvider::new(file.path()).with_poll_interval(1);
+
+        let count: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+        let count2 = count.clone();
+        let callback: PolicyCallback = Arc::new(move |_| {
+            *count2.lock().unwrap() += 1;
+        });
+
+        provider.subscribe(callback).unwrap();
+        assert_eq!(*count.lock().unwrap(), 1);
+
+        // Let two poll ticks pass without changing the file.
+        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+        assert_eq!(*count.lock().unwrap(), 1);
     }
 }
