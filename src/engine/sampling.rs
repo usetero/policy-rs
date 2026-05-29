@@ -473,7 +473,10 @@ mod tests {
     #[test]
     fn parse_trace_id_randomness_non_hex_returns_none() {
         // Non-hex suffix returns None (not a panic).
-        assert_eq!(parse_trace_id_randomness("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"), None);
+        assert_eq!(
+            parse_trace_id_randomness("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"),
+            None
+        );
         // Multibyte UTF-8 char whose byte boundary falls at offset len-14 returns None.
         // "1é23456789012": len=15 bytes, offset=1 is the continuation byte of 'é'.
         assert_eq!(parse_trace_id_randomness("1\u{00e9}23456789012"), None);
