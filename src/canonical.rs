@@ -31,7 +31,9 @@
 //! [`Matchable`]: crate::Matchable
 //! [`get_field`]: crate::Matchable::get_field
 
-use crate::proto::tero::policy::v1::{AggregationTemporality, MetricType, SpanKind, SpanStatusCode};
+use crate::proto::tero::policy::v1::{
+    AggregationTemporality, MetricType, SpanKind, SpanStatusCode,
+};
 
 /// Returns the canonical policy string for a [`MetricType`] value.
 ///
