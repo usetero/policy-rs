@@ -137,11 +137,13 @@ pub(crate) fn parse_tracestate_rv(tracestate: &str) -> Option<u64> {
 ///
 /// The TraceID is a 32-character hex string. We take the last 14 hex
 /// characters (least-significant 56 bits) as the randomness value.
+///
+/// Returns `None` for strings shorter than 14 bytes, strings where the
+/// 14-byte boundary falls inside a multi-byte UTF-8 character, and strings
+/// whose last 14 characters are not valid hex.
 pub(crate) fn parse_trace_id_randomness(trace_id: &str) -> Option<u64> {
-    if trace_id.len() < 14 {
-        return None;
-    }
-    let suffix = &trace_id[trace_id.len() - 14..];
+    let offset = trace_id.len().checked_sub(14)?;
+    let suffix = trace_id.get(offset..)?;
     u64::from_str_radix(suffix, 16)
         .ok()
         .map(|v| v & RANDOMNESS_MASK)
@@ -466,6 +468,19 @@ mod tests {
         assert_eq!(result.unwrap(), expected);
 
         assert_eq!(parse_trace_id_randomness("abc"), None);
+    }
+
+    #[test]
+    fn parse_trace_id_randomness_non_hex_returns_none() {
+        // Non-hex suffix returns None (not a panic).
+        assert_eq!(parse_trace_id_randomness("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"), None);
+        // Multibyte UTF-8 char whose byte boundary falls at offset len-14 returns None.
+        // "1é23456789012": len=15 bytes, offset=1 is the continuation byte of 'é'.
+        assert_eq!(parse_trace_id_randomness("1\u{00e9}23456789012"), None);
+        // Non-ASCII that is valid at the boundary (len-14 is a char boundary) but non-hex.
+        // Empty/short strings.
+        assert_eq!(parse_trace_id_randomness(""), None);
+        assert_eq!(parse_trace_id_randomness("short"), None);
     }
 
     // ==================== parse_tracestate_th tests ====================
