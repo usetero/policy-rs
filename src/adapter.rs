@@ -108,9 +108,7 @@ fn set_attr(attrs: &mut Attrs, path: &[String], value: &str) {
 }
 
 fn delete_attr(attrs: &mut Attrs, path: &[String]) -> bool {
-    path.first()
-        .and_then(|k| attrs.remove(k))
-        .is_some()
+    path.first().and_then(|k| attrs.remove(k)).is_some()
 }
 
 // =============================================================================
@@ -193,9 +191,7 @@ impl Transformable for LogRecord {
                 LogField::TraceId => self.trace_id = Some(value.to_string()),
                 LogField::SpanId => self.span_id = Some(value.to_string()),
                 LogField::EventName => self.event_name = Some(value.to_string()),
-                LogField::ResourceSchemaUrl => {
-                    self.resource_schema_url = Some(value.to_string())
-                }
+                LogField::ResourceSchemaUrl => self.resource_schema_url = Some(value.to_string()),
                 LogField::ScopeSchemaUrl => self.scope_schema_url = Some(value.to_string()),
                 _ => {}
             },
@@ -203,9 +199,7 @@ impl Transformable for LogRecord {
             LogFieldSelector::ResourceAttribute(path) => {
                 set_attr(&mut self.resource_attrs, path, value)
             }
-            LogFieldSelector::ScopeAttribute(path) => {
-                set_attr(&mut self.scope_attrs, path, value)
-            }
+            LogFieldSelector::ScopeAttribute(path) => set_attr(&mut self.scope_attrs, path, value),
         }
     }
 
@@ -237,9 +231,7 @@ impl Transformable for LogRecord {
                 LogField::TraceId => self.trace_id.take().map(Value::String),
                 LogField::SpanId => self.span_id.take().map(Value::String),
                 LogField::EventName => self.event_name.take().map(Value::String),
-                LogField::ResourceSchemaUrl => {
-                    self.resource_schema_url.take().map(Value::String)
-                }
+                LogField::ResourceSchemaUrl => self.resource_schema_url.take().map(Value::String),
                 LogField::ScopeSchemaUrl => self.scope_schema_url.take().map(Value::String),
                 _ => None,
             },
@@ -344,9 +336,7 @@ impl Matchable for MetricRecord {
             MetricFieldSelector::DatapointAttribute(path) => {
                 attr_exists(&self.datapoint_attrs, path)
             }
-            MetricFieldSelector::ResourceAttribute(path) => {
-                attr_exists(&self.resource_attrs, path)
-            }
+            MetricFieldSelector::ResourceAttribute(path) => attr_exists(&self.resource_attrs, path),
             MetricFieldSelector::ScopeAttribute(path) => attr_exists(&self.scope_attrs, path),
             _ => self.get_field(field).is_some(),
         }
@@ -464,9 +454,7 @@ impl Transformable for SpanRecord {
                 TraceField::SpanId => self.span_id = Some(value.to_string()),
                 TraceField::ParentSpanId => self.parent_span_id = Some(value.to_string()),
                 TraceField::TraceState => self.trace_state = Some(value.to_string()),
-                TraceField::ResourceSchemaUrl => {
-                    self.resource_schema_url = Some(value.to_string())
-                }
+                TraceField::ResourceSchemaUrl => self.resource_schema_url = Some(value.to_string()),
                 TraceField::ScopeSchemaUrl => self.scope_schema_url = Some(value.to_string()),
                 TraceField::ScopeName => self.scope_name = Some(value.to_string()),
                 TraceField::ScopeVersion => self.scope_version = Some(value.to_string()),
