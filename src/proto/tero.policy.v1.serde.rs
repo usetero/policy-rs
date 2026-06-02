@@ -622,6 +622,21 @@ impl serde::Serialize for LogMatcher {
                 log_matcher::Match::Contains(v) => {
                     struct_ser.serialize_field("contains", v)?;
                 }
+                log_matcher::Match::Equals(v) => {
+                    struct_ser.serialize_field("equals", v)?;
+                }
+                log_matcher::Match::Gt(v) => {
+                    struct_ser.serialize_field("gt", v)?;
+                }
+                log_matcher::Match::Gte(v) => {
+                    struct_ser.serialize_field("gte", v)?;
+                }
+                log_matcher::Match::Lt(v) => {
+                    struct_ser.serialize_field("lt", v)?;
+                }
+                log_matcher::Match::Lte(v) => {
+                    struct_ser.serialize_field("lte", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -653,6 +668,11 @@ impl<'de> serde::Deserialize<'de> for LogMatcher {
             "ends_with",
             "endsWith",
             "contains",
+            "equals",
+            "gt",
+            "gte",
+            "lt",
+            "lte",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -669,6 +689,11 @@ impl<'de> serde::Deserialize<'de> for LogMatcher {
             StartsWith,
             EndsWith,
             Contains,
+            Equals,
+            Gt,
+            Gte,
+            Lt,
+            Lte,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -702,6 +727,11 @@ impl<'de> serde::Deserialize<'de> for LogMatcher {
                             "startsWith" | "starts_with" => Ok(GeneratedField::StartsWith),
                             "endsWith" | "ends_with" => Ok(GeneratedField::EndsWith),
                             "contains" => Ok(GeneratedField::Contains),
+                            "equals" => Ok(GeneratedField::Equals),
+                            "gt" => Ok(GeneratedField::Gt),
+                            "gte" => Ok(GeneratedField::Gte),
+                            "lt" => Ok(GeneratedField::Lt),
+                            "lte" => Ok(GeneratedField::Lte),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -801,6 +831,41 @@ impl<'de> serde::Deserialize<'de> for LogMatcher {
                                 return Err(serde::de::Error::duplicate_field("contains"));
                             }
                             r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(log_matcher::Match::Contains);
+                        }
+                        GeneratedField::Equals => {
+                            if r#match__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("equals"));
+                            }
+                            r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(log_matcher::Match::Equals)
+;
+                        }
+                        GeneratedField::Gt => {
+                            if r#match__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("gt"));
+                            }
+                            r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(log_matcher::Match::Gt)
+;
+                        }
+                        GeneratedField::Gte => {
+                            if r#match__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("gte"));
+                            }
+                            r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(log_matcher::Match::Gte)
+;
+                        }
+                        GeneratedField::Lt => {
+                            if r#match__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("lt"));
+                            }
+                            r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(log_matcher::Match::Lt)
+;
+                        }
+                        GeneratedField::Lte => {
+                            if r#match__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("lte"));
+                            }
+                            r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(log_matcher::Match::Lte)
+;
                         }
                     }
                 }
@@ -1892,6 +1957,21 @@ impl serde::Serialize for MetricMatcher {
                 metric_matcher::Match::Contains(v) => {
                     struct_ser.serialize_field("contains", v)?;
                 }
+                metric_matcher::Match::Equals(v) => {
+                    struct_ser.serialize_field("equals", v)?;
+                }
+                metric_matcher::Match::Gt(v) => {
+                    struct_ser.serialize_field("gt", v)?;
+                }
+                metric_matcher::Match::Gte(v) => {
+                    struct_ser.serialize_field("gte", v)?;
+                }
+                metric_matcher::Match::Lt(v) => {
+                    struct_ser.serialize_field("lt", v)?;
+                }
+                metric_matcher::Match::Lte(v) => {
+                    struct_ser.serialize_field("lte", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -1927,6 +2007,11 @@ impl<'de> serde::Deserialize<'de> for MetricMatcher {
             "ends_with",
             "endsWith",
             "contains",
+            "equals",
+            "gt",
+            "gte",
+            "lt",
+            "lte",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1945,6 +2030,11 @@ impl<'de> serde::Deserialize<'de> for MetricMatcher {
             StartsWith,
             EndsWith,
             Contains,
+            Equals,
+            Gt,
+            Gte,
+            Lt,
+            Lte,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1980,6 +2070,11 @@ impl<'de> serde::Deserialize<'de> for MetricMatcher {
                             "startsWith" | "starts_with" => Ok(GeneratedField::StartsWith),
                             "endsWith" | "ends_with" => Ok(GeneratedField::EndsWith),
                             "contains" => Ok(GeneratedField::Contains),
+                            "equals" => Ok(GeneratedField::Equals),
+                            "gt" => Ok(GeneratedField::Gt),
+                            "gte" => Ok(GeneratedField::Gte),
+                            "lt" => Ok(GeneratedField::Lt),
+                            "lte" => Ok(GeneratedField::Lte),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2091,6 +2186,41 @@ impl<'de> serde::Deserialize<'de> for MetricMatcher {
                                 return Err(serde::de::Error::duplicate_field("contains"));
                             }
                             r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(metric_matcher::Match::Contains);
+                        }
+                        GeneratedField::Equals => {
+                            if r#match__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("equals"));
+                            }
+                            r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(metric_matcher::Match::Equals)
+;
+                        }
+                        GeneratedField::Gt => {
+                            if r#match__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("gt"));
+                            }
+                            r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(metric_matcher::Match::Gt)
+;
+                        }
+                        GeneratedField::Gte => {
+                            if r#match__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("gte"));
+                            }
+                            r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(metric_matcher::Match::Gte)
+;
+                        }
+                        GeneratedField::Lt => {
+                            if r#match__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("lt"));
+                            }
+                            r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(metric_matcher::Match::Lt)
+;
+                        }
+                        GeneratedField::Lte => {
+                            if r#match__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("lte"));
+                            }
+                            r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(metric_matcher::Match::Lte)
+;
                         }
                     }
                 }
@@ -2294,6 +2424,117 @@ impl<'de> serde::Deserialize<'de> for MetricType {
             }
         }
         deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
+impl serde::Serialize for NumericValue {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.value.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("tero.policy.v1.NumericValue", len)?;
+        if let Some(v) = self.value.as_ref() {
+            match v {
+                numeric_value::Value::IntValue(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("intValue", ToString::to_string(&v).as_str())?;
+                }
+                numeric_value::Value::DoubleValue(v) => {
+                    struct_ser.serialize_field("doubleValue", v)?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for NumericValue {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "int_value",
+            "intValue",
+            "double_value",
+            "doubleValue",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            IntValue,
+            DoubleValue,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "intValue" | "int_value" => Ok(GeneratedField::IntValue),
+                            "doubleValue" | "double_value" => Ok(GeneratedField::DoubleValue),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = NumericValue;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct tero.policy.v1.NumericValue")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<NumericValue, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut value__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::IntValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("intValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| numeric_value::Value::IntValue(x.0));
+                        }
+                        GeneratedField::DoubleValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("doubleValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| numeric_value::Value::DoubleValue(x.0));
+                        }
+                    }
+                }
+                Ok(NumericValue {
+                    value: value__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("tero.policy.v1.NumericValue", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for Policy {
@@ -3687,6 +3928,21 @@ impl serde::Serialize for TraceMatcher {
                 trace_matcher::Match::Contains(v) => {
                     struct_ser.serialize_field("contains", v)?;
                 }
+                trace_matcher::Match::Equals(v) => {
+                    struct_ser.serialize_field("equals", v)?;
+                }
+                trace_matcher::Match::Gt(v) => {
+                    struct_ser.serialize_field("gt", v)?;
+                }
+                trace_matcher::Match::Gte(v) => {
+                    struct_ser.serialize_field("gte", v)?;
+                }
+                trace_matcher::Match::Lt(v) => {
+                    struct_ser.serialize_field("lt", v)?;
+                }
+                trace_matcher::Match::Lte(v) => {
+                    struct_ser.serialize_field("lte", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -3728,6 +3984,11 @@ impl<'de> serde::Deserialize<'de> for TraceMatcher {
             "ends_with",
             "endsWith",
             "contains",
+            "equals",
+            "gt",
+            "gte",
+            "lt",
+            "lte",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -3749,6 +4010,11 @@ impl<'de> serde::Deserialize<'de> for TraceMatcher {
             StartsWith,
             EndsWith,
             Contains,
+            Equals,
+            Gt,
+            Gte,
+            Lt,
+            Lte,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -3787,6 +4053,11 @@ impl<'de> serde::Deserialize<'de> for TraceMatcher {
                             "startsWith" | "starts_with" => Ok(GeneratedField::StartsWith),
                             "endsWith" | "ends_with" => Ok(GeneratedField::EndsWith),
                             "contains" => Ok(GeneratedField::Contains),
+                            "equals" => Ok(GeneratedField::Equals),
+                            "gt" => Ok(GeneratedField::Gt),
+                            "gte" => Ok(GeneratedField::Gte),
+                            "lt" => Ok(GeneratedField::Lt),
+                            "lte" => Ok(GeneratedField::Lte),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -3917,6 +4188,41 @@ impl<'de> serde::Deserialize<'de> for TraceMatcher {
                                 return Err(serde::de::Error::duplicate_field("contains"));
                             }
                             r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(trace_matcher::Match::Contains);
+                        }
+                        GeneratedField::Equals => {
+                            if r#match__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("equals"));
+                            }
+                            r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(trace_matcher::Match::Equals)
+;
+                        }
+                        GeneratedField::Gt => {
+                            if r#match__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("gt"));
+                            }
+                            r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(trace_matcher::Match::Gt)
+;
+                        }
+                        GeneratedField::Gte => {
+                            if r#match__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("gte"));
+                            }
+                            r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(trace_matcher::Match::Gte)
+;
+                        }
+                        GeneratedField::Lt => {
+                            if r#match__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("lt"));
+                            }
+                            r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(trace_matcher::Match::Lt)
+;
+                        }
+                        GeneratedField::Lte => {
+                            if r#match__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("lte"));
+                            }
+                            r#match__ = map_.next_value::<::std::option::Option<_>>()?.map(trace_matcher::Match::Lte)
+;
                         }
                     }
                 }
@@ -4323,5 +4629,157 @@ impl<'de> serde::Deserialize<'de> for TransformStageStatus {
             }
         }
         deserializer.deserialize_struct("tero.policy.v1.TransformStageStatus", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for Value {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.value.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("tero.policy.v1.Value", len)?;
+        if let Some(v) = self.value.as_ref() {
+            match v {
+                value::Value::BoolValue(v) => {
+                    struct_ser.serialize_field("boolValue", v)?;
+                }
+                value::Value::IntValue(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("intValue", ToString::to_string(&v).as_str())?;
+                }
+                value::Value::DoubleValue(v) => {
+                    struct_ser.serialize_field("doubleValue", v)?;
+                }
+                value::Value::BytesValue(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("bytesValue", pbjson::private::base64::encode(&v).as_str())?;
+                }
+                value::Value::HexValue(v) => {
+                    struct_ser.serialize_field("hexValue", v)?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for Value {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "bool_value",
+            "boolValue",
+            "int_value",
+            "intValue",
+            "double_value",
+            "doubleValue",
+            "bytes_value",
+            "bytesValue",
+            "hex_value",
+            "hexValue",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            BoolValue,
+            IntValue,
+            DoubleValue,
+            BytesValue,
+            HexValue,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "boolValue" | "bool_value" => Ok(GeneratedField::BoolValue),
+                            "intValue" | "int_value" => Ok(GeneratedField::IntValue),
+                            "doubleValue" | "double_value" => Ok(GeneratedField::DoubleValue),
+                            "bytesValue" | "bytes_value" => Ok(GeneratedField::BytesValue),
+                            "hexValue" | "hex_value" => Ok(GeneratedField::HexValue),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = Value;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct tero.policy.v1.Value")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<Value, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut value__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::BoolValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("boolValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<_>>()?.map(value::Value::BoolValue);
+                        }
+                        GeneratedField::IntValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("intValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| value::Value::IntValue(x.0));
+                        }
+                        GeneratedField::DoubleValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("doubleValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| value::Value::DoubleValue(x.0));
+                        }
+                        GeneratedField::BytesValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bytesValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| value::Value::BytesValue(x.0));
+                        }
+                        GeneratedField::HexValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hexValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<_>>()?.map(value::Value::HexValue);
+                        }
+                    }
+                }
+                Ok(Value {
+                    value: value__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("tero.policy.v1.Value", FIELDS, GeneratedVisitor)
     }
 }

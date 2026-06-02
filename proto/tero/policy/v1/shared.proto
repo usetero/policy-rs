@@ -50,3 +50,43 @@ message AttributePath {
   // Multiple elements traverse nested maps.
   repeated string path = 1;
 }
+
+// Value carries a typed, non-string scalar for the `equals` matcher. String
+// equality is expressed with the `exact` match type, so this message
+// intentionally has no string variant.
+//
+// `equals` matches when the field value has the same type and value as the set
+// variant. Integer and floating-point values are compared in a single numeric
+// domain (an int_value may match a double field with an equal numeric value and
+// vice versa). All other type pairings do not match.
+//
+// Bytes are authored either as proto-native base64 (`bytes_value`) or as a
+// lowercase-hex string (`hex_value`). The two are equivalent — hex_value is
+// decoded to bytes at policy-compile time. A bare string literal MUST be
+// rejected — use `exact` for strings.
+message Value {
+  // Exactly one must be set.
+  oneof value {
+    bool bool_value = 1;
+    int64 int_value = 2;
+    double double_value = 3;
+    // Raw bytes (base64 in proto JSON).
+    bytes bytes_value = 4;
+    // Bytes encoded as a hexadecimal string (even length; case-insensitive on
+    // input, canonically lowercase). Decoded to bytes at policy-compile time;
+    // an invalid hex string MUST be rejected.
+    string hex_value = 5;
+  }
+}
+
+// NumericValue carries a typed number for the comparison matchers (`gt`, `gte`,
+// `lt`, `lte`). Admits only int and double so that non-numeric comparisons are
+// unrepresentable in the schema rather than rejected at compile time.
+// int and double are compared in a single numeric domain.
+message NumericValue {
+  // Exactly one must be set.
+  oneof value {
+    int64 int_value = 1;
+    double double_value = 2;
+  }
+}

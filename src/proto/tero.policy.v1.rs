@@ -43,6 +43,67 @@ pub struct AttributePath {
     #[prost(string, repeated, tag = "1")]
     pub path: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
+/// Value carries a typed, non-string scalar for the `equals` matcher. String
+/// equality is expressed with the `exact` match type, so this message
+/// intentionally has no string variant.
+///
+/// `equals` matches when the field value has the same type and value as the set
+/// variant. Integer and floating-point values are compared in a single numeric
+/// domain (an int_value may match a double field with an equal numeric value and
+/// vice versa). All other type pairings do not match.
+///
+/// Bytes are authored either as proto-native base64 (`bytes_value`) or as a
+/// lowercase-hex string (`hex_value`). The two are equivalent — hex_value is
+/// decoded to bytes at policy-compile time. A bare string literal MUST be
+/// rejected — use `exact` for strings.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Value {
+    /// Exactly one must be set.
+    #[prost(oneof = "value::Value", tags = "1, 2, 3, 4, 5")]
+    pub value: ::core::option::Option<value::Value>,
+}
+/// Nested message and enum types in `Value`.
+pub mod value {
+    /// Exactly one must be set.
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Value {
+        #[prost(bool, tag = "1")]
+        BoolValue(bool),
+        #[prost(int64, tag = "2")]
+        IntValue(i64),
+        #[prost(double, tag = "3")]
+        DoubleValue(f64),
+        /// Raw bytes (base64 in proto JSON).
+        #[prost(bytes, tag = "4")]
+        BytesValue(::prost::alloc::vec::Vec<u8>),
+        /// Bytes encoded as a hexadecimal string (even length; case-insensitive on
+        /// input, canonically lowercase). Decoded to bytes at policy-compile time;
+        /// an invalid hex string MUST be rejected.
+        #[prost(string, tag = "5")]
+        HexValue(::prost::alloc::string::String),
+    }
+}
+/// NumericValue carries a typed number for the comparison matchers (`gt`, `gte`,
+/// `lt`, `lte`). Admits only int and double so that non-numeric comparisons are
+/// unrepresentable in the schema rather than rejected at compile time.
+/// int and double are compared in a single numeric domain.
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct NumericValue {
+    /// Exactly one must be set.
+    #[prost(oneof = "numeric_value::Value", tags = "1, 2")]
+    pub value: ::core::option::Option<numeric_value::Value>,
+}
+/// Nested message and enum types in `NumericValue`.
+pub mod numeric_value {
+    /// Exactly one must be set.
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
+    pub enum Value {
+        #[prost(int64, tag = "1")]
+        IntValue(i64),
+        #[prost(double, tag = "2")]
+        DoubleValue(f64),
+    }
+}
 /// LogTarget defines matching and actions for logs.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogTarget {
@@ -133,7 +194,14 @@ pub struct LogMatcher {
     #[prost(oneof = "log_matcher::Field", tags = "1, 2, 3, 4")]
     pub field: ::core::option::Option<log_matcher::Field>,
     /// Match type. Exactly one must be set.
-    #[prost(oneof = "log_matcher::Match", tags = "10, 11, 12, 13, 14, 15")]
+    ///
+    /// The string match types (exact, regex, starts_with, ends_with, contains)
+    /// operate only on string field values. To match non-string values, use the
+    /// typed equals matcher or the numeric comparison matchers (gt, gte, lt, lte).
+    #[prost(
+        oneof = "log_matcher::Match",
+        tags = "10, 11, 12, 13, 14, 15, 22, 23, 24, 25, 26"
+    )]
     pub r#match: ::core::option::Option<log_matcher::Match>,
 }
 /// Nested message and enum types in `LogMatcher`.
@@ -156,26 +224,45 @@ pub mod log_matcher {
         ScopeAttribute(super::AttributePath),
     }
     /// Match type. Exactly one must be set.
+    ///
+    /// The string match types (exact, regex, starts_with, ends_with, contains)
+    /// operate only on string field values. To match non-string values, use the
+    /// typed equals matcher or the numeric comparison matchers (gt, gte, lt, lte).
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Match {
-        /// Exact string match
+        /// Exact string match (string field values only)
         #[prost(string, tag = "10")]
         Exact(::prost::alloc::string::String),
-        /// Regular expression match
+        /// Regular expression match (string field values only)
         #[prost(string, tag = "11")]
         Regex(::prost::alloc::string::String),
         /// Field existence check
         #[prost(bool, tag = "12")]
         Exists(bool),
-        /// Literal prefix match
+        /// Literal prefix match (string field values only)
         #[prost(string, tag = "13")]
         StartsWith(::prost::alloc::string::String),
-        /// Literal suffix match
+        /// Literal suffix match (string field values only)
         #[prost(string, tag = "14")]
         EndsWith(::prost::alloc::string::String),
-        /// Literal substring match
+        /// Literal substring match (string field values only)
         #[prost(string, tag = "15")]
         Contains(::prost::alloc::string::String),
+        /// Typed equality for non-string field values (bool, int, double, bytes)
+        #[prost(message, tag = "22")]
+        Equals(super::Value),
+        /// Numeric greater-than comparison (int/double field values)
+        #[prost(message, tag = "23")]
+        Gt(super::NumericValue),
+        /// Numeric greater-than-or-equal comparison (int/double field values)
+        #[prost(message, tag = "24")]
+        Gte(super::NumericValue),
+        /// Numeric less-than comparison (int/double field values)
+        #[prost(message, tag = "25")]
+        Lt(super::NumericValue),
+        /// Numeric less-than-or-equal comparison (int/double field values)
+        #[prost(message, tag = "26")]
+        Lte(super::NumericValue),
     }
 }
 /// LogTransform defines modifications to logs.
@@ -338,6 +425,9 @@ pub enum LogField {
     /// Log record fields
     Body = 1,
     SeverityText = 2,
+    /// trace_id and span_id are bytes. They are authored as lowercase hex and
+    /// matched as raw bytes (exact/equals), or as their hex rendering for string
+    /// match types.
     TraceId = 3,
     SpanId = 4,
     EventName = 5,
@@ -412,7 +502,14 @@ pub struct MetricMatcher {
     pub field: ::core::option::Option<metric_matcher::Field>,
     /// Match type. Exactly one must be set.
     /// Note: For metric_type field, only exists is valid (type equality is implicit).
-    #[prost(oneof = "metric_matcher::Match", tags = "10, 11, 12, 13, 14, 15")]
+    ///
+    /// The string match types (exact, regex, starts_with, ends_with, contains)
+    /// operate only on string field values. To match non-string values, use the
+    /// typed equals matcher or the numeric comparison matchers (gt, gte, lt, lte).
+    #[prost(
+        oneof = "metric_matcher::Match",
+        tags = "10, 11, 12, 13, 14, 15, 22, 23, 24, 25, 26"
+    )]
     pub r#match: ::core::option::Option<metric_matcher::Match>,
 }
 /// Nested message and enum types in `MetricMatcher`.
@@ -442,26 +539,45 @@ pub mod metric_matcher {
     }
     /// Match type. Exactly one must be set.
     /// Note: For metric_type field, only exists is valid (type equality is implicit).
+    ///
+    /// The string match types (exact, regex, starts_with, ends_with, contains)
+    /// operate only on string field values. To match non-string values, use the
+    /// typed equals matcher or the numeric comparison matchers (gt, gte, lt, lte).
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Match {
-        /// Exact string match
+        /// Exact string match (string field values only)
         #[prost(string, tag = "10")]
         Exact(::prost::alloc::string::String),
-        /// Regular expression match
+        /// Regular expression match (string field values only)
         #[prost(string, tag = "11")]
         Regex(::prost::alloc::string::String),
         /// Field existence check
         #[prost(bool, tag = "12")]
         Exists(bool),
-        /// Literal prefix match
+        /// Literal prefix match (string field values only)
         #[prost(string, tag = "13")]
         StartsWith(::prost::alloc::string::String),
-        /// Literal suffix match
+        /// Literal suffix match (string field values only)
         #[prost(string, tag = "14")]
         EndsWith(::prost::alloc::string::String),
-        /// Literal substring match
+        /// Literal substring match (string field values only)
         #[prost(string, tag = "15")]
         Contains(::prost::alloc::string::String),
+        /// Typed equality for non-string field values (bool, int, double, bytes)
+        #[prost(message, tag = "22")]
+        Equals(super::Value),
+        /// Numeric greater-than comparison (int/double field values)
+        #[prost(message, tag = "23")]
+        Gt(super::NumericValue),
+        /// Numeric greater-than-or-equal comparison (int/double field values)
+        #[prost(message, tag = "24")]
+        Gte(super::NumericValue),
+        /// Numeric less-than comparison (int/double field values)
+        #[prost(message, tag = "25")]
+        Lt(super::NumericValue),
+        /// Numeric less-than-or-equal comparison (int/double field values)
+        #[prost(message, tag = "26")]
+        Lte(super::NumericValue),
     }
 }
 /// MetricField identifies simple metric fields (non-keyed).
@@ -618,7 +734,14 @@ pub struct TraceMatcher {
     pub field: ::core::option::Option<trace_matcher::Field>,
     /// Match type. Exactly one must be set.
     /// Note: For span_kind and span_status fields, only exists is valid (equality is implicit).
-    #[prost(oneof = "trace_matcher::Match", tags = "10, 11, 12, 13, 14, 15")]
+    ///
+    /// The string match types (exact, regex, starts_with, ends_with, contains)
+    /// operate only on string field values. To match non-string values, use the
+    /// typed equals matcher or the numeric comparison matchers (gt, gte, lt, lte).
+    #[prost(
+        oneof = "trace_matcher::Match",
+        tags = "10, 11, 12, 13, 14, 15, 22, 23, 24, 25, 26"
+    )]
     pub r#match: ::core::option::Option<trace_matcher::Match>,
 }
 /// Nested message and enum types in `TraceMatcher`.
@@ -651,32 +774,53 @@ pub mod trace_matcher {
         /// Event attribute matcher (matches if span contains an event with this attribute)
         #[prost(message, tag = "8")]
         EventAttribute(super::AttributePath),
-        /// Link trace ID matcher (matches if span has a link to this trace)
+        /// Link trace ID matcher (matches if span has a link to this trace).
+        /// Authored as lowercase hex and decoded to bytes at policy-compile time,
+        /// then compared against link trace ids as raw bytes.
         #[prost(string, tag = "9")]
         LinkTraceId(::prost::alloc::string::String),
     }
     /// Match type. Exactly one must be set.
     /// Note: For span_kind and span_status fields, only exists is valid (equality is implicit).
+    ///
+    /// The string match types (exact, regex, starts_with, ends_with, contains)
+    /// operate only on string field values. To match non-string values, use the
+    /// typed equals matcher or the numeric comparison matchers (gt, gte, lt, lte).
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Match {
-        /// Exact string match
+        /// Exact string match (string field values only)
         #[prost(string, tag = "10")]
         Exact(::prost::alloc::string::String),
-        /// Regular expression match
+        /// Regular expression match (string field values only)
         #[prost(string, tag = "11")]
         Regex(::prost::alloc::string::String),
         /// Field existence check
         #[prost(bool, tag = "12")]
         Exists(bool),
-        /// Literal prefix match
+        /// Literal prefix match (string field values only)
         #[prost(string, tag = "13")]
         StartsWith(::prost::alloc::string::String),
-        /// Literal suffix match
+        /// Literal suffix match (string field values only)
         #[prost(string, tag = "14")]
         EndsWith(::prost::alloc::string::String),
-        /// Literal substring match
+        /// Literal substring match (string field values only)
         #[prost(string, tag = "15")]
         Contains(::prost::alloc::string::String),
+        /// Typed equality for non-string field values (bool, int, double, bytes)
+        #[prost(message, tag = "22")]
+        Equals(super::Value),
+        /// Numeric greater-than comparison (int/double field values)
+        #[prost(message, tag = "23")]
+        Gt(super::NumericValue),
+        /// Numeric greater-than-or-equal comparison (int/double field values)
+        #[prost(message, tag = "24")]
+        Gte(super::NumericValue),
+        /// Numeric less-than comparison (int/double field values)
+        #[prost(message, tag = "25")]
+        Lt(super::NumericValue),
+        /// Numeric less-than-or-equal comparison (int/double field values)
+        #[prost(message, tag = "26")]
+        Lte(super::NumericValue),
     }
 }
 /// TraceSamplingConfig configures probabilistic sampling for traces.
@@ -729,6 +873,9 @@ pub enum TraceField {
     Unspecified = 0,
     /// Span fields
     Name = 1,
+    /// trace_id, span_id, and parent_span_id are bytes. They are authored as
+    /// lowercase hex and matched as raw bytes (exact/equals), or as their hex
+    /// rendering for string match types.
     TraceId = 2,
     SpanId = 3,
     ParentSpanId = 4,

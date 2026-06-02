@@ -10,8 +10,9 @@ use crate::error::PolicyError;
 use crate::field::{LogFieldSelector, MetricFieldSelector, TraceFieldSelector};
 use crate::proto::tero::policy::v1::{
     AggregationTemporality, LogField, LogMatcher, LogSampleKey, MetricField, MetricMatcher,
-    MetricType, SamplingMode, SpanKind, SpanStatusCode, TraceField, TraceMatcher,
-    TraceSamplingConfig, log_matcher, log_sample_key, metric_matcher, trace_matcher,
+    MetricType, NumericValue, SamplingMode, SpanKind, SpanStatusCode, TraceField, TraceMatcher,
+    TraceSamplingConfig, Value, log_matcher, log_sample_key, metric_matcher, numeric_value,
+    trace_matcher, value,
 };
 use crate::registry::PolicyStats;
 
@@ -90,6 +91,101 @@ pub struct ExistenceCheck<S: Signal> {
     pub should_exist: bool,
     /// Whether this is a negated matcher.
     pub is_negated: bool,
+}
+
+/// A compiled non-string typed value for the `equals` matcher.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompiledValue {
+    Bool(bool),
+    Int(i64),
+    Double(f64),
+    /// Raw bytes — `hex_value` is decoded to bytes at compile time.
+    Bytes(Vec<u8>),
+}
+
+/// A compiled numeric value for `gt`/`gte`/`lt`/`lte` matchers.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompiledNumericValue {
+    Int(i64),
+    Double(f64),
+}
+
+/// A compiled typed matcher (equals / numeric comparison).
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompiledTypedMatcher {
+    Equals(CompiledValue),
+    Gt(CompiledNumericValue),
+    Gte(CompiledNumericValue),
+    Lt(CompiledNumericValue),
+    Lte(CompiledNumericValue),
+}
+
+impl CompiledTypedMatcher {
+    /// Evaluate this typed matcher against a typed field value.
+    ///
+    /// Returns `true` when the matcher fires (before applying `negate`).
+    pub fn evaluate(&self, field_value: Option<TypedValue<'_>>) -> bool {
+        let Some(fv) = field_value else {
+            return false;
+        };
+        match self {
+            CompiledTypedMatcher::Equals(expected) => match (expected, &fv) {
+                (CompiledValue::Bool(e), TypedValue::Bool(a)) => e == a,
+                // Numeric domain: int == int, double == double, cross-type promoted to double
+                (CompiledValue::Int(e), TypedValue::Int(a)) => e == a,
+                (CompiledValue::Double(e), TypedValue::Double(a)) => e == a,
+                (CompiledValue::Int(e), TypedValue::Double(a)) => (*e as f64) == *a,
+                (CompiledValue::Double(e), TypedValue::Int(a)) => *e == (*a as f64),
+                (CompiledValue::Bytes(e), TypedValue::Bytes(a)) => e.as_slice() == *a,
+                _ => false,
+            },
+            CompiledTypedMatcher::Gt(threshold) => compare_numeric(fv, threshold, |a, t| a > t),
+            CompiledTypedMatcher::Gte(threshold) => compare_numeric(fv, threshold, |a, t| a >= t),
+            CompiledTypedMatcher::Lt(threshold) => compare_numeric(fv, threshold, |a, t| a < t),
+            CompiledTypedMatcher::Lte(threshold) => compare_numeric(fv, threshold, |a, t| a <= t),
+        }
+    }
+}
+
+/// Perform a numeric comparison between a field value and a compiled threshold.
+fn compare_numeric<F: Fn(f64, f64) -> bool>(
+    fv: TypedValue<'_>,
+    threshold: &CompiledNumericValue,
+    cmp: F,
+) -> bool {
+    let field_f64 = match fv {
+        TypedValue::Int(i) => i as f64,
+        TypedValue::Double(d) => d,
+        _ => return false,
+    };
+    let threshold_f64 = match threshold {
+        CompiledNumericValue::Int(i) => *i as f64,
+        CompiledNumericValue::Double(d) => *d,
+    };
+    cmp(field_f64, threshold_f64)
+}
+
+/// Typed check for non-string matchers (equals, gt, gte, lt, lte).
+#[derive(Debug, Clone)]
+pub struct TypedCheck<S: Signal> {
+    /// Index into CompiledMatchers::policies.
+    pub policy_index: usize,
+    /// The field to read.
+    pub field: S::FieldSelector,
+    /// The compiled matcher.
+    pub matcher: CompiledTypedMatcher,
+    /// Whether this is a negated matcher.
+    pub is_negated: bool,
+}
+
+/// A typed field value returned by `Matchable::get_typed_value`.
+#[derive(Debug, Clone)]
+pub enum TypedValue<'a> {
+    String(std::borrow::Cow<'a, str>),
+    Bool(bool),
+    Int(i64),
+    Double(f64),
+    Bytes(&'a [u8]),
 }
 
 /// Pattern info for building Vectorscan databases.
@@ -287,6 +383,8 @@ pub struct CompiledMatchers<S: Signal> {
     pub databases: HashMap<MatchKey<S>, CompiledDatabase>,
     /// Existence checks that can't be compiled to Hyperscan.
     pub existence_checks: Vec<ExistenceCheck<S>>,
+    /// Typed matchers (equals, gt, gte, lt, lte) evaluated directly.
+    pub typed_checks: Vec<TypedCheck<S>>,
     /// Compiled policies indexed by position.
     pub policies: Vec<CompiledPolicy<S>>,
 }
@@ -328,6 +426,8 @@ pub struct PatternGroups<S: Signal> {
     pub groups: HashMap<MatchKey<S>, Vec<PatternInfo>>,
     /// Existence checks that can't be compiled to Hyperscan.
     pub existence_checks: Vec<ExistenceCheck<S>>,
+    /// Typed matchers (equals, gt, gte, lt, lte).
+    pub typed_checks: Vec<TypedCheck<S>>,
     /// Compiled policies.
     pub policies: Vec<CompiledPolicy<S>>,
 }
@@ -337,6 +437,7 @@ impl<S: Signal> Default for PatternGroups<S> {
         Self {
             groups: HashMap::new(),
             existence_checks: Vec::new(),
+            typed_checks: Vec::new(),
             policies: Vec::new(),
         }
     }
@@ -400,6 +501,7 @@ impl PatternGroups<LogSignal> {
                     policy_index,
                     &mut result.groups,
                     &mut result.existence_checks,
+                    &mut result.typed_checks,
                 );
             }
         }
@@ -467,6 +569,7 @@ impl PatternGroups<MetricSignal> {
                     policy_index,
                     &mut result.groups,
                     &mut result.existence_checks,
+                    &mut result.typed_checks,
                 );
             }
         }
@@ -530,6 +633,7 @@ impl PatternGroups<TraceSignal> {
                     policy_index,
                     &mut result.groups,
                     &mut result.existence_checks,
+                    &mut result.typed_checks,
                 );
             }
         }
@@ -581,6 +685,7 @@ impl<S: Signal> PatternGroups<S> {
         Ok(CompiledMatchers {
             databases,
             existence_checks: self.existence_checks,
+            typed_checks: self.typed_checks,
             policies: self.policies,
         })
     }
@@ -590,11 +695,10 @@ impl<S: Signal> PatternGroups<S> {
 // Shared match type processing
 // =============================================================================
 
-/// Process a match type and add the pattern or existence check.
+/// Process a match type and add the pattern, existence check, or typed check.
 ///
-/// This is shared across log and metric matchers since the match oneof
-/// (exact, regex, exists, starts_with, ends_with, contains) is structurally
-/// identical across signal types.
+/// This is shared across log, metric, and trace matchers since the match oneof
+/// is structurally identical across signal types.
 fn process_match_type<S: Signal, M>(
     match_type: Option<&M>,
     field: S::FieldSelector,
@@ -603,6 +707,7 @@ fn process_match_type<S: Signal, M>(
     policy_index: usize,
     groups: &mut HashMap<MatchKey<S>, Vec<PatternInfo>>,
     existence_checks: &mut Vec<ExistenceCheck<S>>,
+    typed_checks: &mut Vec<TypedCheck<S>>,
 ) where
     M: MatchTypeAccessor,
 {
@@ -661,6 +766,14 @@ fn process_match_type<S: Signal, M>(
                 case_insensitive,
             });
         }
+        MatchVariant::Typed(matcher) => {
+            typed_checks.push(TypedCheck {
+                policy_index,
+                field,
+                matcher,
+                is_negated,
+            });
+        }
     }
 }
 
@@ -672,11 +785,48 @@ enum MatchVariant<'a> {
     StartsWith(&'a str),
     EndsWith(&'a str),
     Contains(&'a str),
+    /// Typed matcher (equals/gt/gte/lt/lte) — bypasses Vectorscan.
+    Typed(CompiledTypedMatcher),
 }
 
 /// Trait for converting signal-specific match oneofs to MatchVariant.
 trait MatchTypeAccessor {
     fn as_match_variant(&self) -> MatchVariant<'_>;
+}
+
+/// Compile a proto `Value` to a `CompiledValue`, returning `None` on error.
+fn compile_value(v: &Value) -> Option<CompiledValue> {
+    match &v.value {
+        Some(value::Value::BoolValue(b)) => Some(CompiledValue::Bool(*b)),
+        Some(value::Value::IntValue(i)) => Some(CompiledValue::Int(*i)),
+        Some(value::Value::DoubleValue(d)) => Some(CompiledValue::Double(*d)),
+        Some(value::Value::BytesValue(b)) => Some(CompiledValue::Bytes(b.clone())),
+        Some(value::Value::HexValue(h)) => {
+            // Decode hex string to bytes at compile time.
+            hex_decode(h).map(CompiledValue::Bytes)
+        }
+        None => None,
+    }
+}
+
+/// Compile a proto `NumericValue` to a `CompiledNumericValue`.
+fn compile_numeric(v: &NumericValue) -> Option<CompiledNumericValue> {
+    match &v.value {
+        Some(numeric_value::Value::IntValue(i)) => Some(CompiledNumericValue::Int(*i)),
+        Some(numeric_value::Value::DoubleValue(d)) => Some(CompiledNumericValue::Double(*d)),
+        None => None,
+    }
+}
+
+/// Decode a lowercase-hex string to bytes. Returns `None` on invalid input.
+fn hex_decode(hex: &str) -> Option<Vec<u8>> {
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect()
 }
 
 impl MatchTypeAccessor for log_matcher::Match {
@@ -688,6 +838,21 @@ impl MatchTypeAccessor for log_matcher::Match {
             log_matcher::Match::StartsWith(s) => MatchVariant::StartsWith(s),
             log_matcher::Match::EndsWith(s) => MatchVariant::EndsWith(s),
             log_matcher::Match::Contains(s) => MatchVariant::Contains(s),
+            log_matcher::Match::Equals(v) => compile_value(v)
+                .map(|cv| MatchVariant::Typed(CompiledTypedMatcher::Equals(cv)))
+                .unwrap_or(MatchVariant::Exists(false)), // invalid value → never match
+            log_matcher::Match::Gt(v) => compile_numeric(v)
+                .map(|cn| MatchVariant::Typed(CompiledTypedMatcher::Gt(cn)))
+                .unwrap_or(MatchVariant::Exists(false)),
+            log_matcher::Match::Gte(v) => compile_numeric(v)
+                .map(|cn| MatchVariant::Typed(CompiledTypedMatcher::Gte(cn)))
+                .unwrap_or(MatchVariant::Exists(false)),
+            log_matcher::Match::Lt(v) => compile_numeric(v)
+                .map(|cn| MatchVariant::Typed(CompiledTypedMatcher::Lt(cn)))
+                .unwrap_or(MatchVariant::Exists(false)),
+            log_matcher::Match::Lte(v) => compile_numeric(v)
+                .map(|cn| MatchVariant::Typed(CompiledTypedMatcher::Lte(cn)))
+                .unwrap_or(MatchVariant::Exists(false)),
         }
     }
 }
@@ -701,6 +866,21 @@ impl MatchTypeAccessor for metric_matcher::Match {
             metric_matcher::Match::StartsWith(s) => MatchVariant::StartsWith(s),
             metric_matcher::Match::EndsWith(s) => MatchVariant::EndsWith(s),
             metric_matcher::Match::Contains(s) => MatchVariant::Contains(s),
+            metric_matcher::Match::Equals(v) => compile_value(v)
+                .map(|cv| MatchVariant::Typed(CompiledTypedMatcher::Equals(cv)))
+                .unwrap_or(MatchVariant::Exists(false)),
+            metric_matcher::Match::Gt(v) => compile_numeric(v)
+                .map(|cn| MatchVariant::Typed(CompiledTypedMatcher::Gt(cn)))
+                .unwrap_or(MatchVariant::Exists(false)),
+            metric_matcher::Match::Gte(v) => compile_numeric(v)
+                .map(|cn| MatchVariant::Typed(CompiledTypedMatcher::Gte(cn)))
+                .unwrap_or(MatchVariant::Exists(false)),
+            metric_matcher::Match::Lt(v) => compile_numeric(v)
+                .map(|cn| MatchVariant::Typed(CompiledTypedMatcher::Lt(cn)))
+                .unwrap_or(MatchVariant::Exists(false)),
+            metric_matcher::Match::Lte(v) => compile_numeric(v)
+                .map(|cn| MatchVariant::Typed(CompiledTypedMatcher::Lte(cn)))
+                .unwrap_or(MatchVariant::Exists(false)),
         }
     }
 }
@@ -714,6 +894,21 @@ impl MatchTypeAccessor for trace_matcher::Match {
             trace_matcher::Match::StartsWith(s) => MatchVariant::StartsWith(s),
             trace_matcher::Match::EndsWith(s) => MatchVariant::EndsWith(s),
             trace_matcher::Match::Contains(s) => MatchVariant::Contains(s),
+            trace_matcher::Match::Equals(v) => compile_value(v)
+                .map(|cv| MatchVariant::Typed(CompiledTypedMatcher::Equals(cv)))
+                .unwrap_or(MatchVariant::Exists(false)),
+            trace_matcher::Match::Gt(v) => compile_numeric(v)
+                .map(|cn| MatchVariant::Typed(CompiledTypedMatcher::Gt(cn)))
+                .unwrap_or(MatchVariant::Exists(false)),
+            trace_matcher::Match::Gte(v) => compile_numeric(v)
+                .map(|cn| MatchVariant::Typed(CompiledTypedMatcher::Gte(cn)))
+                .unwrap_or(MatchVariant::Exists(false)),
+            trace_matcher::Match::Lt(v) => compile_numeric(v)
+                .map(|cn| MatchVariant::Typed(CompiledTypedMatcher::Lt(cn)))
+                .unwrap_or(MatchVariant::Exists(false)),
+            trace_matcher::Match::Lte(v) => compile_numeric(v)
+                .map(|cn| MatchVariant::Typed(CompiledTypedMatcher::Lte(cn)))
+                .unwrap_or(MatchVariant::Exists(false)),
         }
     }
 }
