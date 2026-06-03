@@ -699,6 +699,7 @@ impl<S: Signal> PatternGroups<S> {
 ///
 /// This is shared across log, metric, and trace matchers since the match oneof
 /// is structurally identical across signal types.
+#[allow(clippy::too_many_arguments)]
 fn process_match_type<S: Signal, M>(
     match_type: Option<&M>,
     field: S::FieldSelector,
@@ -820,7 +821,7 @@ fn compile_numeric(v: &NumericValue) -> Option<CompiledNumericValue> {
 
 /// Decode a lowercase-hex string to bytes. Returns `None` on invalid input.
 fn hex_decode(hex: &str) -> Option<Vec<u8>> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return None;
     }
     (0..hex.len())
