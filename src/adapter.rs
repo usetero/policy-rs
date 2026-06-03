@@ -471,12 +471,20 @@ impl Matchable for SpanRecord {
                 .trace_id_bytes
                 .as_deref()
                 .map(TypedValue::Bytes)
-                .or_else(|| self.trace_id.as_deref().map(|s| TypedValue::String(Cow::Borrowed(s)))),
+                .or_else(|| {
+                    self.trace_id
+                        .as_deref()
+                        .map(|s| TypedValue::String(Cow::Borrowed(s)))
+                }),
             TraceFieldSelector::Simple(TraceField::SpanId) => self
                 .span_id_bytes
                 .as_deref()
                 .map(TypedValue::Bytes)
-                .or_else(|| self.span_id.as_deref().map(|s| TypedValue::String(Cow::Borrowed(s)))),
+                .or_else(|| {
+                    self.span_id
+                        .as_deref()
+                        .map(|s| TypedValue::String(Cow::Borrowed(s)))
+                }),
             TraceFieldSelector::Simple(TraceField::ParentSpanId) => self
                 .parent_span_id_bytes
                 .as_deref()
