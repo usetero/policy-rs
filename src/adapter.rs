@@ -350,21 +350,37 @@ impl Matchable for MetricRecord {
 /// A generic trace span that satisfies the `Matchable` + `Transformable`
 /// contract for [`TraceSignal`].
 ///
-/// `trace_id` and `span_id` must be lowercase hex strings. The engine's
-/// consistent-probability sampler slices the last 14 hex chars of `trace_id`
-/// for the 56-bit randomness value.
-///
 /// After calling [`PolicyEngine::evaluate_trace`], check
 /// [`SpanRecord::sampling_threshold`]: if `Some`, write its value into the
 /// span's tracestate under the `th` sub-key of the `ot` entry.
+///
+/// # ID fields
+///
+/// `trace_id`, `span_id`, and `parent_span_id` are bytes fields per the OTel
+/// proto. Store them as raw bytes in the `_bytes` fields. The engine's sampler
+/// reads raw bytes directly via `get_typed_value` — no hex conversion at
+/// evaluation time.
+///
+/// For string matchers (`exact`, `regex`, etc.) the hex-encoded string fields
+/// are used. Populate both if you need both string matching and sampling;
+/// populate only `_bytes` if you only need sampling.
 ///
 /// [`PolicyEngine::evaluate_trace`]: crate::PolicyEngine::evaluate_trace
 #[derive(Debug, Default, Clone)]
 pub struct SpanRecord {
     pub name: Option<String>,
+    /// Hex-encoded trace ID for string matchers. See also `trace_id_bytes`.
     pub trace_id: Option<String>,
+    /// Raw bytes for the trace ID — used by the sampler directly.
+    pub trace_id_bytes: Option<Vec<u8>>,
+    /// Hex-encoded span ID for string matchers. See also `span_id_bytes`.
     pub span_id: Option<String>,
+    /// Raw bytes for the span ID.
+    pub span_id_bytes: Option<Vec<u8>>,
+    /// Hex-encoded parent span ID for string matchers. See also `parent_span_id_bytes`.
     pub parent_span_id: Option<String>,
+    /// Raw bytes for the parent span ID.
+    pub parent_span_id_bytes: Option<Vec<u8>>,
     pub trace_state: Option<String>,
     pub resource_schema_url: Option<String>,
     pub scope_schema_url: Option<String>,
@@ -441,6 +457,36 @@ impl Matchable for SpanRecord {
             TraceFieldSelector::ResourceAttribute(path) => attr_exists(&self.resource_attrs, path),
             TraceFieldSelector::ScopeAttribute(path) => attr_exists(&self.scope_attrs, path),
             _ => self.get_field(field).is_some(),
+        }
+    }
+
+    /// Returns raw bytes for `trace_id`, `span_id`, and `parent_span_id` when
+    /// the `_bytes` fields are populated, bypassing hex-string conversion in the
+    /// sampler. Falls back to the string value (wrapped as `TypedValue::String`)
+    /// for all other fields and when no bytes are set.
+    fn get_typed_value(&self, field: &TraceFieldSelector) -> Option<crate::engine::TypedValue<'_>> {
+        use crate::engine::TypedValue;
+        match field {
+            TraceFieldSelector::Simple(TraceField::TraceId) => self
+                .trace_id_bytes
+                .as_deref()
+                .map(TypedValue::Bytes)
+                .or_else(|| self.trace_id.as_deref().map(|s| TypedValue::String(Cow::Borrowed(s)))),
+            TraceFieldSelector::Simple(TraceField::SpanId) => self
+                .span_id_bytes
+                .as_deref()
+                .map(TypedValue::Bytes)
+                .or_else(|| self.span_id.as_deref().map(|s| TypedValue::String(Cow::Borrowed(s)))),
+            TraceFieldSelector::Simple(TraceField::ParentSpanId) => self
+                .parent_span_id_bytes
+                .as_deref()
+                .map(TypedValue::Bytes)
+                .or_else(|| {
+                    self.parent_span_id
+                        .as_deref()
+                        .map(|s| TypedValue::String(Cow::Borrowed(s)))
+                }),
+            _ => self.get_field(field).map(TypedValue::String),
         }
     }
 }
