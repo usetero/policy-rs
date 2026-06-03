@@ -35,8 +35,8 @@ use serde::Deserialize;
 use crate::error::PolicyError;
 use crate::policy::Policy;
 use crate::proto::tero::policy::v1::{
-    self as pb, AttributePath, log_add, log_matcher, log_redact, log_remove, log_rename,
-    log_sample_key, metric_matcher, policy, trace_matcher,
+    self as pb, AttributePath, NumericValue, Value, log_add, log_matcher, log_redact, log_remove,
+    log_rename, log_sample_key, metric_matcher, numeric_value, policy, trace_matcher, value,
 };
 
 use super::{PolicyCallback, PolicyProvider};
@@ -529,8 +529,10 @@ struct JsonTraceSamplingConfig {
 
 // -- Shared types -------------------------------------------------------------
 
-/// Match type, shared across all signal matchers. Exactly one variant is
-/// expected per matcher object (e.g. `"regex": "error"` or `"exact": "FOO"`).
+/// Match type, shared across all signal matchers.
+///
+/// Supports shorthand scalar syntax (`gte: 500`, `equals: true`) as well as the
+/// canonical proto form (`equals: {int_value: 200}`).
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum JsonMatchType {
@@ -540,6 +542,54 @@ enum JsonMatchType {
     StartsWith(String),
     EndsWith(String),
     Contains(String),
+    /// Typed equality: `equals: true`, `equals: 200`, `equals: 0.5`, or
+    /// `equals: {hex_value: "4bf9..."}`.
+    Equals(JsonValue),
+    /// Numeric greater-than: `gt: 500` or `gt: {int_value: 500}`.
+    Gt(JsonNumericValue),
+    /// Numeric greater-than-or-equal: `gte: 500`.
+    Gte(JsonNumericValue),
+    /// Numeric less-than: `lt: 0.5`.
+    Lt(JsonNumericValue),
+    /// Numeric less-than-or-equal: `lte: 1.0`.
+    Lte(JsonNumericValue),
+}
+
+/// Typed value for the `equals` matcher. Accepts scalar shorthand or canonical
+/// proto-object form.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum JsonValue {
+    Bool(bool),
+    Int(i64),
+    Double(f64),
+    Object(JsonValueObject),
+}
+
+/// Canonical proto-object form of a `Value`.
+#[derive(Deserialize)]
+struct JsonValueObject {
+    bool_value: Option<bool>,
+    int_value: Option<i64>,
+    double_value: Option<f64>,
+    hex_value: Option<String>,
+}
+
+/// Typed numeric value for comparison matchers. Accepts scalar shorthand or
+/// canonical proto-object form.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum JsonNumericValue {
+    Int(i64),
+    Double(f64),
+    Object(JsonNumericValueObject),
+}
+
+/// Canonical proto-object form of a `NumericValue`.
+#[derive(Deserialize)]
+struct JsonNumericValueObject {
+    int_value: Option<i64>,
+    double_value: Option<f64>,
 }
 
 /// Attribute path supporting three JSON representations:
@@ -946,6 +996,11 @@ impl JsonMatchType {
             Self::StartsWith(v) => log_matcher::Match::StartsWith(v),
             Self::EndsWith(v) => log_matcher::Match::EndsWith(v),
             Self::Contains(v) => log_matcher::Match::Contains(v),
+            Self::Equals(v) => log_matcher::Match::Equals(v.into_proto()),
+            Self::Gt(v) => log_matcher::Match::Gt(v.into_proto()),
+            Self::Gte(v) => log_matcher::Match::Gte(v.into_proto()),
+            Self::Lt(v) => log_matcher::Match::Lt(v.into_proto()),
+            Self::Lte(v) => log_matcher::Match::Lte(v.into_proto()),
         }
     }
 
@@ -957,6 +1012,11 @@ impl JsonMatchType {
             Self::StartsWith(v) => metric_matcher::Match::StartsWith(v),
             Self::EndsWith(v) => metric_matcher::Match::EndsWith(v),
             Self::Contains(v) => metric_matcher::Match::Contains(v),
+            Self::Equals(v) => metric_matcher::Match::Equals(v.into_proto()),
+            Self::Gt(v) => metric_matcher::Match::Gt(v.into_proto()),
+            Self::Gte(v) => metric_matcher::Match::Gte(v.into_proto()),
+            Self::Lt(v) => metric_matcher::Match::Lt(v.into_proto()),
+            Self::Lte(v) => metric_matcher::Match::Lte(v.into_proto()),
         }
     }
 
@@ -968,7 +1028,56 @@ impl JsonMatchType {
             Self::StartsWith(v) => trace_matcher::Match::StartsWith(v),
             Self::EndsWith(v) => trace_matcher::Match::EndsWith(v),
             Self::Contains(v) => trace_matcher::Match::Contains(v),
+            Self::Equals(v) => trace_matcher::Match::Equals(v.into_proto()),
+            Self::Gt(v) => trace_matcher::Match::Gt(v.into_proto()),
+            Self::Gte(v) => trace_matcher::Match::Gte(v.into_proto()),
+            Self::Lt(v) => trace_matcher::Match::Lt(v.into_proto()),
+            Self::Lte(v) => trace_matcher::Match::Lte(v.into_proto()),
         }
+    }
+}
+
+impl JsonValue {
+    fn into_proto(self) -> Value {
+        let inner = match self {
+            Self::Bool(b) => value::Value::BoolValue(b),
+            Self::Int(i) => value::Value::IntValue(i),
+            Self::Double(d) => value::Value::DoubleValue(d),
+            Self::Object(obj) => {
+                if let Some(b) = obj.bool_value {
+                    value::Value::BoolValue(b)
+                } else if let Some(i) = obj.int_value {
+                    value::Value::IntValue(i)
+                } else if let Some(d) = obj.double_value {
+                    value::Value::DoubleValue(d)
+                } else if let Some(h) = obj.hex_value {
+                    value::Value::HexValue(h)
+                } else {
+                    // Empty object — will fail at compile time (no variant set)
+                    return Value { value: None };
+                }
+            }
+        };
+        Value { value: Some(inner) }
+    }
+}
+
+impl JsonNumericValue {
+    fn into_proto(self) -> NumericValue {
+        let inner = match self {
+            Self::Int(i) => numeric_value::Value::IntValue(i),
+            Self::Double(d) => numeric_value::Value::DoubleValue(d),
+            Self::Object(obj) => {
+                if let Some(i) = obj.int_value {
+                    numeric_value::Value::IntValue(i)
+                } else if let Some(d) = obj.double_value {
+                    numeric_value::Value::DoubleValue(d)
+                } else {
+                    return NumericValue { value: None };
+                }
+            }
+        };
+        NumericValue { value: Some(inner) }
     }
 }
 
@@ -2772,6 +2881,108 @@ mod tests {
         assert!(matches!(
             metric_target.r#match[0].field,
             Some(metric_matcher::Field::AggregationTemporality(v)) if v == pb::AggregationTemporality::Delta as i32
+        ));
+    }
+
+    // ==================== Typed matcher JSON parsing tests ====================
+
+    #[test]
+    fn load_policy_with_gte_int_shorthand() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "drop-errors",
+                    "name": "Drop HTTP errors",
+                    "log": {
+                        "match": [
+                            { "log_attribute": "http.status_code", "gte": 500 }
+                        ],
+                        "keep": "none"
+                    }
+                }
+            ]
+        }"#;
+        let file = create_temp_policy_file(content);
+        let policies = FileProvider::new(file.path()).load().unwrap();
+        let m = &policies[0].log_target().unwrap().r#match[0];
+        assert!(matches!(
+            m.r#match,
+            Some(log_matcher::Match::Gte(ref v)) if matches!(v.value, Some(pb::numeric_value::Value::IntValue(500)))
+        ));
+    }
+
+    #[test]
+    fn load_policy_with_equals_bool_shorthand() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "drop-cache-hits",
+                    "name": "Drop cache hits",
+                    "log": {
+                        "match": [
+                            { "log_attribute": "cache.hit", "equals": true }
+                        ],
+                        "keep": "none"
+                    }
+                }
+            ]
+        }"#;
+        let file = create_temp_policy_file(content);
+        let policies = FileProvider::new(file.path()).load().unwrap();
+        let m = &policies[0].log_target().unwrap().r#match[0];
+        assert!(matches!(
+            m.r#match,
+            Some(log_matcher::Match::Equals(ref v)) if matches!(v.value, Some(pb::value::Value::BoolValue(true)))
+        ));
+    }
+
+    #[test]
+    fn load_policy_with_lt_double_shorthand() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "drop-fast",
+                    "name": "Drop fast spans",
+                    "log": {
+                        "match": [
+                            { "log_attribute": "duration_s", "lt": 0.1 }
+                        ],
+                        "keep": "none"
+                    }
+                }
+            ]
+        }"#;
+        let file = create_temp_policy_file(content);
+        let policies = FileProvider::new(file.path()).load().unwrap();
+        let m = &policies[0].log_target().unwrap().r#match[0];
+        assert!(matches!(
+            m.r#match,
+            Some(log_matcher::Match::Lt(ref v)) if matches!(v.value, Some(pb::numeric_value::Value::DoubleValue(_)))
+        ));
+    }
+
+    #[test]
+    fn load_policy_with_equals_canonical_hex_value() {
+        let content = r#"{
+            "policies": [
+                {
+                    "id": "keep-trace",
+                    "name": "Keep trace",
+                    "log": {
+                        "match": [
+                            { "log_field": "trace_id", "equals": {"hex_value": "4bf92f3577b34da6a3ce929d0e0e4736"} }
+                        ],
+                        "keep": "all"
+                    }
+                }
+            ]
+        }"#;
+        let file = create_temp_policy_file(content);
+        let policies = FileProvider::new(file.path()).load().unwrap();
+        let m = &policies[0].log_target().unwrap().r#match[0];
+        assert!(matches!(
+            m.r#match,
+            Some(log_matcher::Match::Equals(ref v)) if matches!(&v.value, Some(pb::value::Value::HexValue(h)) if h == "4bf92f3577b34da6a3ce929d0e0e4736")
         ));
     }
 

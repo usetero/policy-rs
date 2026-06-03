@@ -11,8 +11,9 @@ mod transform;
 mod transformable;
 
 pub use compiled::{
-    CompiledDatabase, CompiledMatchers, CompiledPolicy, CompiledSamplingMode,
-    CompiledTraceSampling, ExistenceCheck,
+    CompiledDatabase, CompiledMatchers, CompiledNumericValue, CompiledPolicy, CompiledSamplingMode,
+    CompiledTraceSampling, CompiledTypedMatcher, CompiledValue, ExistenceCheck, TypedCheck,
+    TypedValue,
 };
 pub use keep::CompiledKeep;
 pub use match_key::MatchKey;
@@ -552,6 +553,24 @@ fn find_matching_policies<S: Signal>(
 
         let exists = record.field_exists(&check.field);
         let field_matches = exists == check.should_exist;
+
+        if check.is_negated {
+            if field_matches {
+                disqualified[check.policy_index] = true;
+            }
+        } else if field_matches {
+            match_counts[check.policy_index] += 1;
+        }
+    }
+
+    // Handle typed checks (equals, gt, gte, lt, lte)
+    for check in &compiled.typed_checks {
+        if disqualified[check.policy_index] {
+            continue;
+        }
+
+        let typed_value = record.get_typed_value(&check.field);
+        let field_matches = check.matcher.evaluate(typed_value);
 
         if check.is_negated {
             if field_matches {
@@ -5820,6 +5839,453 @@ mod tests {
             log.log_attributes.get("tag"),
             Some(&"second".to_string()),
             "zzz-add-second should win because it runs last in alphanumeric order"
+        );
+    }
+
+    // ==================== Typed matcher tests ====================
+
+    use crate::proto::tero::policy::v1::{NumericValue, Value, numeric_value, value};
+
+    fn log_attr_typed_matcher(
+        key: &str,
+        match_type: log_matcher::Match,
+        negate: bool,
+    ) -> LogMatcher {
+        LogMatcher {
+            field: Some(log_matcher::Field::LogAttribute(attr_path(key))),
+            r#match: Some(match_type),
+            negate,
+            case_insensitive: false,
+        }
+    }
+
+    fn int_value(i: i64) -> Value {
+        Value {
+            value: Some(value::Value::IntValue(i)),
+        }
+    }
+
+    fn double_value(d: f64) -> Value {
+        Value {
+            value: Some(value::Value::DoubleValue(d)),
+        }
+    }
+
+    fn bool_value(b: bool) -> Value {
+        Value {
+            value: Some(value::Value::BoolValue(b)),
+        }
+    }
+
+    fn int_numeric(i: i64) -> NumericValue {
+        NumericValue {
+            value: Some(numeric_value::Value::IntValue(i)),
+        }
+    }
+
+    fn double_numeric(d: f64) -> NumericValue {
+        NumericValue {
+            value: Some(numeric_value::Value::DoubleValue(d)),
+        }
+    }
+
+    /// A log record that supports typed (non-string) attribute values.
+    struct TypedAttrLog {
+        attrs: HashMap<String, TypedValue<'static>>,
+    }
+
+    impl TypedAttrLog {
+        fn new() -> Self {
+            Self {
+                attrs: HashMap::new(),
+            }
+        }
+        fn with_int(mut self, k: &str, v: i64) -> Self {
+            self.attrs.insert(k.to_string(), TypedValue::Int(v));
+            self
+        }
+        fn with_double(mut self, k: &str, v: f64) -> Self {
+            self.attrs.insert(k.to_string(), TypedValue::Double(v));
+            self
+        }
+        fn with_bool(mut self, k: &str, v: bool) -> Self {
+            self.attrs.insert(k.to_string(), TypedValue::Bool(v));
+            self
+        }
+        fn with_string(mut self, k: &str, v: &'static str) -> Self {
+            self.attrs.insert(
+                k.to_string(),
+                TypedValue::String(std::borrow::Cow::Borrowed(v)),
+            );
+            self
+        }
+    }
+
+    impl Matchable for TypedAttrLog {
+        type Signal = LogSignal;
+        fn get_field(&self, field: &LogFieldSelector) -> Option<std::borrow::Cow<'_, str>> {
+            match field {
+                LogFieldSelector::LogAttribute(path) => {
+                    path.first().and_then(|k| self.attrs.get(k)).and_then(|v| {
+                        if let TypedValue::String(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                }
+                _ => None,
+            }
+        }
+        fn field_exists(&self, field: &LogFieldSelector) -> bool {
+            match field {
+                LogFieldSelector::LogAttribute(path) => path
+                    .first()
+                    .map(|k| self.attrs.contains_key(k))
+                    .unwrap_or(false),
+                _ => false,
+            }
+        }
+        fn get_typed_value(&self, field: &LogFieldSelector) -> Option<TypedValue<'_>> {
+            match field {
+                LogFieldSelector::LogAttribute(path) => path
+                    .first()
+                    .and_then(|k| self.attrs.get(k))
+                    .map(|v| match v {
+                        TypedValue::Int(i) => TypedValue::Int(*i),
+                        TypedValue::Double(d) => TypedValue::Double(*d),
+                        TypedValue::Bool(b) => TypedValue::Bool(*b),
+                        TypedValue::String(s) => TypedValue::String(s.clone()),
+                        TypedValue::Bytes(b) => TypedValue::Bytes(b),
+                    }),
+                _ => None,
+            }
+        }
+    }
+
+    #[test]
+    fn typed_equals_int_matches() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+        let policy = make_policy(
+            "drop-200",
+            vec![log_attr_typed_matcher(
+                "status",
+                log_matcher::Match::Equals(int_value(200)),
+                false,
+            )],
+            "none",
+            true,
+        );
+        handle.update(vec![policy]);
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let log = TypedAttrLog::new().with_int("status", 200);
+        assert_eq!(
+            engine.evaluate(&snapshot, &log).unwrap(),
+            EvaluateResult::Drop {
+                policy_id: "drop-200".to_string()
+            }
+        );
+
+        let log_miss = TypedAttrLog::new().with_int("status", 404);
+        assert_eq!(
+            engine.evaluate(&snapshot, &log_miss).unwrap(),
+            EvaluateResult::NoMatch
+        );
+    }
+
+    #[test]
+    fn typed_equals_bool_matches() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+        let policy = make_policy(
+            "drop-cache-hits",
+            vec![log_attr_typed_matcher(
+                "cache.hit",
+                log_matcher::Match::Equals(bool_value(true)),
+                false,
+            )],
+            "none",
+            true,
+        );
+        handle.update(vec![policy]);
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        assert_eq!(
+            engine
+                .evaluate(&snapshot, &TypedAttrLog::new().with_bool("cache.hit", true))
+                .unwrap(),
+            EvaluateResult::Drop {
+                policy_id: "drop-cache-hits".to_string()
+            }
+        );
+        assert_eq!(
+            engine
+                .evaluate(
+                    &snapshot,
+                    &TypedAttrLog::new().with_bool("cache.hit", false)
+                )
+                .unwrap(),
+            EvaluateResult::NoMatch
+        );
+    }
+
+    #[test]
+    fn typed_gte_int_matches() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+        let policy = make_policy(
+            "drop-errors",
+            vec![log_attr_typed_matcher(
+                "status",
+                log_matcher::Match::Gte(int_numeric(500)),
+                false,
+            )],
+            "none",
+            true,
+        );
+        handle.update(vec![policy]);
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        assert_eq!(
+            engine
+                .evaluate(&snapshot, &TypedAttrLog::new().with_int("status", 500))
+                .unwrap(),
+            EvaluateResult::Drop {
+                policy_id: "drop-errors".to_string()
+            }
+        );
+        assert_eq!(
+            engine
+                .evaluate(&snapshot, &TypedAttrLog::new().with_int("status", 503))
+                .unwrap(),
+            EvaluateResult::Drop {
+                policy_id: "drop-errors".to_string()
+            }
+        );
+        assert_eq!(
+            engine
+                .evaluate(&snapshot, &TypedAttrLog::new().with_int("status", 499))
+                .unwrap(),
+            EvaluateResult::NoMatch
+        );
+    }
+
+    #[test]
+    fn typed_lt_double_matches() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+        let policy = make_policy(
+            "drop-fast",
+            vec![log_attr_typed_matcher(
+                "duration_s",
+                log_matcher::Match::Lt(double_numeric(0.1)),
+                false,
+            )],
+            "none",
+            true,
+        );
+        handle.update(vec![policy]);
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        assert_eq!(
+            engine
+                .evaluate(
+                    &snapshot,
+                    &TypedAttrLog::new().with_double("duration_s", 0.05)
+                )
+                .unwrap(),
+            EvaluateResult::Drop {
+                policy_id: "drop-fast".to_string()
+            }
+        );
+        assert_eq!(
+            engine
+                .evaluate(
+                    &snapshot,
+                    &TypedAttrLog::new().with_double("duration_s", 0.1)
+                )
+                .unwrap(),
+            EvaluateResult::NoMatch
+        );
+    }
+
+    #[test]
+    fn typed_range_and_logic() {
+        // Match status >= 200 AND status < 400 (success responses)
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+        let policy = make_policy(
+            "drop-success",
+            vec![
+                log_attr_typed_matcher("status", log_matcher::Match::Gte(int_numeric(200)), false),
+                log_attr_typed_matcher("status", log_matcher::Match::Lt(int_numeric(400)), false),
+            ],
+            "none",
+            true,
+        );
+        handle.update(vec![policy]);
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        assert_eq!(
+            engine
+                .evaluate(&snapshot, &TypedAttrLog::new().with_int("status", 200))
+                .unwrap(),
+            EvaluateResult::Drop {
+                policy_id: "drop-success".to_string()
+            }
+        );
+        assert_eq!(
+            engine
+                .evaluate(&snapshot, &TypedAttrLog::new().with_int("status", 301))
+                .unwrap(),
+            EvaluateResult::Drop {
+                policy_id: "drop-success".to_string()
+            }
+        );
+        assert_eq!(
+            engine
+                .evaluate(&snapshot, &TypedAttrLog::new().with_int("status", 400))
+                .unwrap(),
+            EvaluateResult::NoMatch
+        );
+        assert_eq!(
+            engine
+                .evaluate(&snapshot, &TypedAttrLog::new().with_int("status", 500))
+                .unwrap(),
+            EvaluateResult::NoMatch
+        );
+    }
+
+    #[test]
+    fn typed_equals_double_matches() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+        let policy = make_policy(
+            "drop-half",
+            vec![log_attr_typed_matcher(
+                "ratio",
+                log_matcher::Match::Equals(double_value(0.5)),
+                false,
+            )],
+            "none",
+            true,
+        );
+        handle.update(vec![policy]);
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        assert_eq!(
+            engine
+                .evaluate(&snapshot, &TypedAttrLog::new().with_double("ratio", 0.5))
+                .unwrap(),
+            EvaluateResult::Drop {
+                policy_id: "drop-half".to_string()
+            }
+        );
+        assert_eq!(
+            engine
+                .evaluate(&snapshot, &TypedAttrLog::new().with_double("ratio", 0.6))
+                .unwrap(),
+            EvaluateResult::NoMatch
+        );
+    }
+
+    #[test]
+    fn typed_type_mismatch_is_nonmatch() {
+        // String value vs int matcher → non-match (not an error)
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+        let policy = make_policy(
+            "drop-200",
+            vec![log_attr_typed_matcher(
+                "status",
+                log_matcher::Match::Equals(int_value(200)),
+                false,
+            )],
+            "none",
+            true,
+        );
+        handle.update(vec![policy]);
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let log = TypedAttrLog::new().with_string("status", "200");
+        assert_eq!(
+            engine.evaluate(&snapshot, &log).unwrap(),
+            EvaluateResult::NoMatch
+        );
+    }
+
+    #[test]
+    fn typed_numeric_cross_domain_int_equals_double() {
+        // int_value: 5 equals double field with value 5.0 (cross-domain)
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+        let policy = make_policy(
+            "match-five",
+            vec![log_attr_typed_matcher(
+                "x",
+                log_matcher::Match::Equals(int_value(5)),
+                false,
+            )],
+            "all",
+            true,
+        );
+        handle.update(vec![policy]);
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        assert_eq!(
+            engine
+                .evaluate(&snapshot, &TypedAttrLog::new().with_double("x", 5.0))
+                .unwrap(),
+            EvaluateResult::Keep {
+                policy_id: "match-five".to_string(),
+                transformed: false
+            }
+        );
+    }
+
+    #[test]
+    fn typed_negated_equals() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+        let policy = make_policy(
+            "drop-non-200",
+            vec![log_attr_typed_matcher(
+                "status",
+                log_matcher::Match::Equals(int_value(200)),
+                true,
+            )], // negated
+            "none",
+            true,
+        );
+        handle.update(vec![policy]);
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        // status=200: negated equals fires → policy is disqualified → NoMatch
+        assert_eq!(
+            engine
+                .evaluate(&snapshot, &TypedAttrLog::new().with_int("status", 200))
+                .unwrap(),
+            EvaluateResult::NoMatch
+        );
+        // status=500: negated equals does not fire → policy matches → Drop
+        assert_eq!(
+            engine
+                .evaluate(&snapshot, &TypedAttrLog::new().with_int("status", 500))
+                .unwrap(),
+            EvaluateResult::Drop {
+                policy_id: "drop-non-200".to_string()
+            }
         );
     }
 }

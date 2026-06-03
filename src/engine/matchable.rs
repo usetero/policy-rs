@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 
+use super::compiled::TypedValue;
 use super::signal::Signal;
 
 /// Trait for types that can be matched against policies.
@@ -131,6 +132,42 @@ pub trait Matchable {
     /// that should still satisfy `exists: true` matchers.
     fn field_exists(&self, field: &<Self::Signal as Signal>::FieldSelector) -> bool {
         self.get_field(field).is_some()
+    }
+
+    /// Get a typed value for use with `equals`, `gt`, `gte`, `lt`, and `lte` matchers.
+    ///
+    /// The default implementation wraps [`get_field`] and returns the string value
+    /// as `TypedValue::String`. Override this method to expose non-string field
+    /// values (booleans, integers, floats, raw bytes) so that typed matchers
+    /// can match them.
+    ///
+    /// Return `None` when the field is absent. A present-but-wrong-type value
+    /// causes a non-match (not an error), consistent with the fail-open policy.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn get_typed_value(&self, field: &LogFieldSelector) -> Option<TypedValue<'_>> {
+    ///     if let LogFieldSelector::LogAttribute(path) = field {
+    ///         let key = path.first()?;
+    ///         return match self.attrs.get(key)? {
+    ///             Attr::String(s)  => Some(TypedValue::String(Cow::Borrowed(s))),
+    ///             Attr::Int(i)     => Some(TypedValue::Int(*i)),
+    ///             Attr::Double(d)  => Some(TypedValue::Double(*d)),
+    ///             Attr::Bool(b)    => Some(TypedValue::Bool(*b)),
+    ///             Attr::Bytes(bs)  => Some(TypedValue::Bytes(bs)),
+    ///         };
+    ///     }
+    ///     self.get_field(field).map(TypedValue::String)
+    /// }
+    /// ```
+    ///
+    /// [`get_field`]: Matchable::get_field
+    fn get_typed_value(
+        &self,
+        field: &<Self::Signal as Signal>::FieldSelector,
+    ) -> Option<TypedValue<'_>> {
+        self.get_field(field).map(TypedValue::String)
     }
 }
 
