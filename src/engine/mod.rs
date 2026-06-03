@@ -6164,6 +6164,30 @@ mod tests {
     }
 
     #[test]
+    fn typed_equals_double_matches() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+        let policy = make_policy(
+            "drop-half",
+            vec![log_attr_typed_matcher("ratio", log_matcher::Match::Equals(double_value(0.5)), false)],
+            "none",
+            true,
+        );
+        handle.update(vec![policy]);
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        assert_eq!(
+            engine.evaluate(&snapshot, &TypedAttrLog::new().with_double("ratio", 0.5)).unwrap(),
+            EvaluateResult::Drop { policy_id: "drop-half".to_string() }
+        );
+        assert_eq!(
+            engine.evaluate(&snapshot, &TypedAttrLog::new().with_double("ratio", 0.6)).unwrap(),
+            EvaluateResult::NoMatch
+        );
+    }
+
+    #[test]
     fn typed_type_mismatch_is_nonmatch() {
         // String value vs int matcher → non-match (not an error)
         let registry = PolicyRegistry::new();
