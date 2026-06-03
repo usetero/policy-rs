@@ -163,7 +163,10 @@ pub trait Matchable {
     /// ```
     ///
     /// [`get_field`]: Matchable::get_field
-    fn get_typed_value(&self, field: &<Self::Signal as Signal>::FieldSelector) -> Option<TypedValue<'_>> {
+    fn get_typed_value(
+        &self,
+        field: &<Self::Signal as Signal>::FieldSelector,
+    ) -> Option<TypedValue<'_>> {
         self.get_field(field).map(TypedValue::String)
     }
 }
