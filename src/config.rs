@@ -29,6 +29,9 @@
 //! register_providers(&app_config.policy_providers, &registry).unwrap();
 //! ```
 
+#[cfg(any(feature = "http", feature = "grpc"))]
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::PolicyError;
@@ -70,6 +73,11 @@ pub struct FileProviderConfig {
     pub id: String,
     /// Path to the policy JSON file.
     pub path: String,
+    /// Optional polling interval in seconds. When set, the provider also polls
+    /// the file periodically in addition to filesystem-event watching — useful
+    /// in environments where events are unreliable (Kubernetes ConfigMaps, etc.).
+    #[serde(default)]
+    pub poll_interval_secs: Option<u64>,
 }
 
 /// Configuration for an HTTP-based policy provider.
@@ -89,6 +97,14 @@ pub struct HttpProviderConfig {
     /// Content type for requests: "protobuf" or "json" (default: "protobuf").
     #[serde(default)]
     pub content_type: Option<String>,
+    /// OTel resource attributes sent in `ClientMetadata` on every sync request.
+    /// Used to identify this client to the policy server (e.g. `service.name`,
+    /// `service.version`, `service.namespace`).
+    #[serde(default)]
+    pub resource_attributes: HashMap<String, String>,
+    /// Arbitrary labels sent in `ClientMetadata` on every sync request.
+    #[serde(default)]
+    pub labels: HashMap<String, String>,
 }
 
 /// Configuration for a gRPC-based policy provider.
@@ -105,6 +121,14 @@ pub struct GrpcProviderConfig {
     /// Polling interval in seconds (default: 60).
     #[serde(default)]
     pub poll_interval_secs: Option<u64>,
+    /// OTel resource attributes sent in `ClientMetadata` on every sync request.
+    /// Used to identify this client to the policy server (e.g. `service.name`,
+    /// `service.version`, `service.namespace`).
+    #[serde(default)]
+    pub resource_attributes: HashMap<String, String>,
+    /// Arbitrary labels sent in `ClientMetadata` on every sync request.
+    #[serde(default)]
+    pub labels: HashMap<String, String>,
 }
 
 /// An HTTP header with name and value.
@@ -142,7 +166,10 @@ impl ProviderConfig {
     pub async fn register(&self, registry: &PolicyRegistry) -> Result<ProviderId, PolicyError> {
         match self {
             ProviderConfig::File(config) => {
-                let provider = FileProvider::new(&config.path);
+                let mut provider = FileProvider::new(&config.path);
+                if let Some(secs) = config.poll_interval_secs {
+                    provider = provider.with_poll_interval(secs);
+                }
                 registry.subscribe(&provider)
             }
             #[cfg(feature = "http")]
@@ -154,17 +181,12 @@ impl ProviderConfig {
 
                 let mut http_config = HttpConfig::new(&config.url);
 
-                // Add headers
                 for header in &config.headers {
                     http_config = http_config.header(&header.name, &header.value);
                 }
-
-                // Set poll interval if specified
                 if let Some(secs) = config.poll_interval_secs {
                     http_config = http_config.poll_interval(Duration::from_secs(secs));
                 }
-
-                // Set content type if specified
                 if let Some(ref ct) = config.content_type {
                     let content_type = match ct.to_lowercase().as_str() {
                         "json" => ContentType::Json,
@@ -172,8 +194,11 @@ impl ProviderConfig {
                     };
                     http_config = http_config.content_type(content_type);
                 }
+                if !config.resource_attributes.is_empty() || !config.labels.is_empty() {
+                    http_config = http_config
+                        .client_metadata(build_client_metadata(&config.resource_attributes, &config.labels));
+                }
 
-                // Use async initialization to avoid blocking
                 let provider = HttpProvider::new_with_initial_fetch(http_config).await?;
                 registry.subscribe(&provider)
             }
@@ -184,21 +209,55 @@ impl ProviderConfig {
 
                 let mut grpc_config = GrpcConfig::new(&config.url);
 
-                // Add headers
                 for header in &config.headers {
                     grpc_config = grpc_config.header(&header.name, &header.value);
                 }
-
-                // Set poll interval if specified
                 if let Some(secs) = config.poll_interval_secs {
                     grpc_config = grpc_config.poll_interval(Duration::from_secs(secs));
                 }
+                if !config.resource_attributes.is_empty() || !config.labels.is_empty() {
+                    grpc_config = grpc_config
+                        .client_metadata(build_client_metadata(&config.resource_attributes, &config.labels));
+                }
 
-                // Use async initialization to avoid blocking
                 let provider = GrpcProvider::new_with_initial_fetch(grpc_config).await?;
                 registry.subscribe(&provider)
             }
         }
+    }
+}
+
+#[cfg(any(feature = "http", feature = "grpc"))]
+/// Convert flat string maps to a [`ClientMetadata`] proto message.
+///
+/// `resource_attributes` and `labels` are converted to `Vec<KeyValue>` using
+/// OTel string values. If both maps are empty this helper should not be called
+/// (the provider will omit `client_metadata` entirely, matching previous behaviour).
+fn build_client_metadata(
+    resource_attributes: &HashMap<String, String>,
+    labels: &HashMap<String, String>,
+) -> crate::proto::tero::policy::v1::ClientMetadata {
+    use crate::otel_common::{AnyValue, KeyValue, any_value};
+
+    let to_kv = |map: &HashMap<String, String>| -> Vec<KeyValue> {
+        let mut kvs: Vec<KeyValue> = map
+            .iter()
+            .map(|(k, v)| KeyValue {
+                key: k.clone(),
+                value: Some(AnyValue {
+                    value: Some(any_value::Value::StringValue(v.clone())),
+                }),
+                ..Default::default()
+            })
+            .collect();
+        kvs.sort_by(|a, b| a.key.cmp(&b.key));
+        kvs
+    };
+
+    crate::proto::tero::policy::v1::ClientMetadata {
+        supported_policy_stages: vec![],
+        resource_attributes: to_kv(resource_attributes),
+        labels: to_kv(labels),
     }
 }
 
@@ -243,6 +302,21 @@ mod tests {
             ProviderConfig::File(c) => {
                 assert_eq!(c.id, "local");
                 assert_eq!(c.path, "policies.json");
+                assert!(c.poll_interval_secs.is_none());
+            }
+            #[allow(unreachable_patterns)]
+            _ => panic!("Expected File provider config"),
+        }
+    }
+
+    #[test]
+    fn parse_file_provider_config_with_poll_interval() {
+        let json = r#"{"id": "local", "type": "file", "path": "policies.json", "poll_interval_secs": 30}"#;
+        let config: ProviderConfig = serde_json::from_str(json).unwrap();
+
+        match config {
+            ProviderConfig::File(c) => {
+                assert_eq!(c.poll_interval_secs, Some(30));
             }
             #[allow(unreachable_patterns)]
             _ => panic!("Expected File provider config"),
@@ -286,6 +360,39 @@ mod tests {
                 assert_eq!(c.headers[0].value, "Bearer token123");
                 assert_eq!(c.poll_interval_secs, Some(30));
                 assert_eq!(c.content_type, Some("json".to_string()));
+                assert!(c.resource_attributes.is_empty());
+                assert!(c.labels.is_empty());
+            }
+            _ => panic!("Expected Http provider config"),
+        }
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn parse_http_provider_config_with_resource_attributes_and_labels() {
+        let json = r#"{
+            "id": "remote",
+            "type": "http",
+            "url": "https://api.example.com/policies",
+            "resource_attributes": {
+                "service.name": "my-service",
+                "service.version": "1.2.3",
+                "service.namespace": "production"
+            },
+            "labels": {
+                "env": "prod",
+                "team": "platform"
+            }
+        }"#;
+        let config: ProviderConfig = serde_json::from_str(json).unwrap();
+
+        match config {
+            ProviderConfig::Http(c) => {
+                assert_eq!(c.resource_attributes.get("service.name").map(String::as_str), Some("my-service"));
+                assert_eq!(c.resource_attributes.get("service.version").map(String::as_str), Some("1.2.3"));
+                assert_eq!(c.resource_attributes.get("service.namespace").map(String::as_str), Some("production"));
+                assert_eq!(c.labels.get("env").map(String::as_str), Some("prod"));
+                assert_eq!(c.labels.get("team").map(String::as_str), Some("platform"));
             }
             _ => panic!("Expected Http provider config"),
         }
@@ -346,6 +453,7 @@ mod tests {
         let config = ProviderConfig::File(FileProviderConfig {
             id: "test".to_string(),
             path: "testdata/policies.json".to_string(),
+            poll_interval_secs: None,
         });
 
         let registry = PolicyRegistry::new();
@@ -368,10 +476,12 @@ mod tests {
             ProviderConfig::File(FileProviderConfig {
                 id: "provider1".to_string(),
                 path: "testdata/policies.json".to_string(),
+                poll_interval_secs: None,
             }),
             ProviderConfig::File(FileProviderConfig {
                 id: "provider2".to_string(),
                 path: "testdata/policies.json".to_string(),
+                poll_interval_secs: None,
             }),
         ];
 
@@ -387,6 +497,7 @@ mod tests {
         let config = ProviderConfig::File(FileProviderConfig {
             id: "test".to_string(),
             path: "policies.json".to_string(),
+            poll_interval_secs: None,
         });
 
         let json = serde_json::to_string(&config).unwrap();
