@@ -195,8 +195,10 @@ impl ProviderConfig {
                     http_config = http_config.content_type(content_type);
                 }
                 if !config.resource_attributes.is_empty() || !config.labels.is_empty() {
-                    http_config = http_config
-                        .client_metadata(build_client_metadata(&config.resource_attributes, &config.labels));
+                    http_config = http_config.client_metadata(build_client_metadata(
+                        &config.resource_attributes,
+                        &config.labels,
+                    ));
                 }
 
                 let provider = HttpProvider::new_with_initial_fetch(http_config).await?;
@@ -216,8 +218,10 @@ impl ProviderConfig {
                     grpc_config = grpc_config.poll_interval(Duration::from_secs(secs));
                 }
                 if !config.resource_attributes.is_empty() || !config.labels.is_empty() {
-                    grpc_config = grpc_config
-                        .client_metadata(build_client_metadata(&config.resource_attributes, &config.labels));
+                    grpc_config = grpc_config.client_metadata(build_client_metadata(
+                        &config.resource_attributes,
+                        &config.labels,
+                    ));
                 }
 
                 let provider = GrpcProvider::new_with_initial_fetch(grpc_config).await?;
@@ -311,7 +315,8 @@ mod tests {
 
     #[test]
     fn parse_file_provider_config_with_poll_interval() {
-        let json = r#"{"id": "local", "type": "file", "path": "policies.json", "poll_interval_secs": 30}"#;
+        let json =
+            r#"{"id": "local", "type": "file", "path": "policies.json", "poll_interval_secs": 30}"#;
         let config: ProviderConfig = serde_json::from_str(json).unwrap();
 
         match config {
@@ -388,9 +393,24 @@ mod tests {
 
         match config {
             ProviderConfig::Http(c) => {
-                assert_eq!(c.resource_attributes.get("service.name").map(String::as_str), Some("my-service"));
-                assert_eq!(c.resource_attributes.get("service.version").map(String::as_str), Some("1.2.3"));
-                assert_eq!(c.resource_attributes.get("service.namespace").map(String::as_str), Some("production"));
+                assert_eq!(
+                    c.resource_attributes
+                        .get("service.name")
+                        .map(String::as_str),
+                    Some("my-service")
+                );
+                assert_eq!(
+                    c.resource_attributes
+                        .get("service.version")
+                        .map(String::as_str),
+                    Some("1.2.3")
+                );
+                assert_eq!(
+                    c.resource_attributes
+                        .get("service.namespace")
+                        .map(String::as_str),
+                    Some("production")
+                );
                 assert_eq!(c.labels.get("env").map(String::as_str), Some("prod"));
                 assert_eq!(c.labels.get("team").map(String::as_str), Some("platform"));
             }
