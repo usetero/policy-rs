@@ -6169,7 +6169,11 @@ mod tests {
         let handle = registry.register_provider();
         let policy = make_policy(
             "drop-half",
-            vec![log_attr_typed_matcher("ratio", log_matcher::Match::Equals(double_value(0.5)), false)],
+            vec![log_attr_typed_matcher(
+                "ratio",
+                log_matcher::Match::Equals(double_value(0.5)),
+                false,
+            )],
             "none",
             true,
         );
@@ -6178,11 +6182,17 @@ mod tests {
         let engine = PolicyEngine::new();
 
         assert_eq!(
-            engine.evaluate(&snapshot, &TypedAttrLog::new().with_double("ratio", 0.5)).unwrap(),
-            EvaluateResult::Drop { policy_id: "drop-half".to_string() }
+            engine
+                .evaluate(&snapshot, &TypedAttrLog::new().with_double("ratio", 0.5))
+                .unwrap(),
+            EvaluateResult::Drop {
+                policy_id: "drop-half".to_string()
+            }
         );
         assert_eq!(
-            engine.evaluate(&snapshot, &TypedAttrLog::new().with_double("ratio", 0.6)).unwrap(),
+            engine
+                .evaluate(&snapshot, &TypedAttrLog::new().with_double("ratio", 0.6))
+                .unwrap(),
             EvaluateResult::NoMatch
         );
     }
