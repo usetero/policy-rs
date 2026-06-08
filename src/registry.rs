@@ -476,8 +476,7 @@ impl PolicyRegistry {
                 .map(|entry| {
                     let id = entry.policy.id().to_string();
                     let mut stats = entry.stats.reset_all();
-                    stats.compilation_errors =
-                        snapshot.compilation_errors_for(&id).to_vec();
+                    stats.compilation_errors = snapshot.compilation_errors_for(&id).to_vec();
                     (id, stats)
                 })
                 .collect()
@@ -870,12 +869,16 @@ mod tests {
 
         let snapshot = registry.snapshot();
         // The policy still appears in the snapshot even though it failed to compile.
-        assert!(snapshot.get("broken").is_some(), "invalid policy still in snapshot");
+        assert!(
+            snapshot.get("broken").is_some(),
+            "invalid policy still in snapshot"
+        );
         let errs = snapshot.compilation_errors_for("broken");
         assert!(!errs.is_empty(), "compilation errors must be in snapshot");
         assert!(
             errs[0].contains("invalid regex"),
-            "error must describe the problem: {}", errs[0]
+            "error must describe the problem: {}",
+            errs[0]
         );
     }
 
@@ -960,7 +963,8 @@ mod tests {
         );
         assert!(
             broken.1.compilation_errors[0].contains("invalid regex"),
-            "error text must be preserved: {}", broken.1.compilation_errors[0]
+            "error text must be preserved: {}",
+            broken.1.compilation_errors[0]
         );
     }
 }

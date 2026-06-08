@@ -528,7 +528,10 @@ impl PatternGroups<LogSignal> {
 
             let policy_index = result.policies.len();
             let required_match_count = log_target.r#match.iter().filter(|m| !m.negate).count();
-            let sample_key = log_target.sample_key.as_ref().and_then(extract_log_sample_key);
+            let sample_key = log_target
+                .sample_key
+                .as_ref()
+                .and_then(extract_log_sample_key);
 
             result.policies.push(CompiledPolicy {
                 id: policy.id().to_string(),
@@ -617,8 +620,7 @@ impl PatternGroups<MetricSignal> {
             }
 
             let policy_index = result.policies.len();
-            let required_match_count =
-                metric_target.r#match.iter().filter(|m| !m.negate).count();
+            let required_match_count = metric_target.r#match.iter().filter(|m| !m.negate).count();
             let keep = if metric_target.keep {
                 CompiledKeep::All
             } else {
@@ -975,8 +977,8 @@ fn validate_regex_matcher(
 /// with the compiler's error description. This is used at policy-compilation
 /// time to reject invalid patterns before they reach `hs_compile_multi`.
 fn validate_vectorscan_pattern(pattern: &str, flags: u32) -> Result<(), String> {
-    let c_pattern = CString::new(pattern)
-        .map_err(|e| format!("pattern contains null byte: {e}"))?;
+    let c_pattern =
+        CString::new(pattern).map_err(|e| format!("pattern contains null byte: {e}"))?;
     let mut db: *mut vectorscan_rs_sys::hs_database_t = ptr::null_mut();
     let mut compile_error: *mut vectorscan_rs_sys::hs_compile_error_t = ptr::null_mut();
 
@@ -1885,12 +1887,21 @@ mod tests {
         };
         let policy = Policy::new(proto);
         let stats = Arc::new(PolicyStats::default());
-        let groups =
-            PatternGroups::build_from_log_policies([(policy, stats)].into_iter()).unwrap();
-        assert!(groups.policies.is_empty(), "invalid policy should be skipped");
-        let errs = groups.compilation_errors.get("no-matchers").expect("errors collected");
+        let groups = PatternGroups::build_from_log_policies([(policy, stats)].into_iter()).unwrap();
+        assert!(
+            groups.policies.is_empty(),
+            "invalid policy should be skipped"
+        );
+        let errs = groups
+            .compilation_errors
+            .get("no-matchers")
+            .expect("errors collected");
         assert!(!errs.is_empty());
-        assert!(errs[0].contains("no matchers"), "error should mention matchers: {}", errs[0]);
+        assert!(
+            errs[0].contains("no matchers"),
+            "error should mention matchers: {}",
+            errs[0]
+        );
     }
 
     #[test]
@@ -1913,8 +1924,14 @@ mod tests {
         let stats = Arc::new(PolicyStats::default());
         let groups =
             PatternGroups::build_from_metric_policies([(policy, stats)].into_iter()).unwrap();
-        assert!(groups.policies.is_empty(), "invalid policy should be skipped");
-        let errs = groups.compilation_errors.get("metric-no-matchers").expect("errors collected");
+        assert!(
+            groups.policies.is_empty(),
+            "invalid policy should be skipped"
+        );
+        let errs = groups
+            .compilation_errors
+            .get("metric-no-matchers")
+            .expect("errors collected");
         assert!(!errs.is_empty());
     }
 
@@ -1938,7 +1955,10 @@ mod tests {
         let stats = Arc::new(PolicyStats::default());
         let groups =
             PatternGroups::build_from_trace_policies([(policy, stats)].into_iter()).unwrap();
-        assert!(groups.policies.is_empty(), "invalid policy should be skipped");
+        assert!(
+            groups.policies.is_empty(),
+            "invalid policy should be skipped"
+        );
         let errs = groups
             .compilation_errors
             .get("trace-no-matchers")
@@ -1964,8 +1984,7 @@ mod tests {
     fn invalid_log_regex_is_collected_as_error() {
         let policy = make_log_policy_with_regex("bad-regex", "([unclosed");
         let stats = Arc::new(PolicyStats::default());
-        let groups =
-            PatternGroups::build_from_log_policies([(policy, stats)].into_iter()).unwrap();
+        let groups = PatternGroups::build_from_log_policies([(policy, stats)].into_iter()).unwrap();
         assert!(groups.policies.is_empty(), "invalid policy must be skipped");
         let errs = groups
             .compilation_errors
@@ -1974,9 +1993,14 @@ mod tests {
         assert!(!errs.is_empty());
         assert!(
             errs[0].starts_with("log: match[0]: invalid regex"),
-            "error must have signal + location prefix: {}", errs[0]
+            "error must have signal + location prefix: {}",
+            errs[0]
         );
-        assert!(errs[0].contains("([unclosed"), "error must quote the pattern: {}", errs[0]);
+        assert!(
+            errs[0].contains("([unclosed"),
+            "error must quote the pattern: {}",
+            errs[0]
+        );
     }
 
     #[test]
@@ -1989,10 +2013,13 @@ mod tests {
             (bad, Arc::new(PolicyStats::default())),
             (good, Arc::new(PolicyStats::default())),
         ];
-        let compiled =
-            CompiledMatchers::<LogSignal>::build(pairs.into_iter()).unwrap();
+        let compiled = CompiledMatchers::<LogSignal>::build(pairs.into_iter()).unwrap();
 
-        assert_eq!(compiled.policies.len(), 1, "only the valid policy should compile");
+        assert_eq!(
+            compiled.policies.len(),
+            1,
+            "only the valid policy should compile"
+        );
         assert_eq!(compiled.policies[0].id, "good");
         assert!(
             compiled.compilation_errors.contains_key("bad"),
@@ -2032,15 +2059,26 @@ mod tests {
         };
         let policy = Policy::new(proto);
         let stats = Arc::new(PolicyStats::default());
-        let groups =
-            PatternGroups::build_from_log_policies([(policy, stats)].into_iter()).unwrap();
+        let groups = PatternGroups::build_from_log_policies([(policy, stats)].into_iter()).unwrap();
         let errs = groups
             .compilation_errors
             .get("multi-bad")
             .expect("errors collected");
-        assert_eq!(errs.len(), 2, "both regex errors must be collected: {errs:?}");
-        assert!(errs[0].contains("match[0]"), "first error at index 0: {}", errs[0]);
-        assert!(errs[1].contains("match[1]"), "second error at index 1: {}", errs[1]);
+        assert_eq!(
+            errs.len(),
+            2,
+            "both regex errors must be collected: {errs:?}"
+        );
+        assert!(
+            errs[0].contains("match[0]"),
+            "first error at index 0: {}",
+            errs[0]
+        );
+        assert!(
+            errs[1].contains("match[1]"),
+            "second error at index 1: {}",
+            errs[1]
+        );
     }
 
     #[test]
@@ -2053,12 +2091,21 @@ mod tests {
             "banana",
         );
         let stats = Arc::new(PolicyStats::default());
-        let groups =
-            PatternGroups::build_from_log_policies([(policy, stats)].into_iter()).unwrap();
-        assert!(groups.policies.is_empty(), "policy with bad keep must be skipped");
-        let errs = groups.compilation_errors.get("bad-keep").expect("error collected");
+        let groups = PatternGroups::build_from_log_policies([(policy, stats)].into_iter()).unwrap();
+        assert!(
+            groups.policies.is_empty(),
+            "policy with bad keep must be skipped"
+        );
+        let errs = groups
+            .compilation_errors
+            .get("bad-keep")
+            .expect("error collected");
         assert!(!errs.is_empty());
-        assert!(errs[0].starts_with("log: keep:"), "error must be prefixed: {}", errs[0]);
+        assert!(
+            errs[0].starts_with("log: keep:"),
+            "error must be prefixed: {}",
+            errs[0]
+        );
     }
 
     #[test]
@@ -2095,8 +2142,7 @@ mod tests {
         };
         let policy = Policy::new(proto);
         let stats = Arc::new(PolicyStats::default());
-        let groups =
-            PatternGroups::build_from_log_policies([(policy, stats)].into_iter()).unwrap();
+        let groups = PatternGroups::build_from_log_policies([(policy, stats)].into_iter()).unwrap();
         assert!(
             groups.policies.is_empty(),
             "policy with invalid transform must be skipped"
@@ -2108,7 +2154,8 @@ mod tests {
         assert!(!errs.is_empty());
         assert!(
             errs[0].starts_with("log: transform:"),
-            "error must be prefixed: {}", errs[0]
+            "error must be prefixed: {}",
+            errs[0]
         );
     }
 
@@ -2140,9 +2187,19 @@ mod tests {
         let stats = Arc::new(PolicyStats::default());
         let groups =
             PatternGroups::build_from_metric_policies([(policy, stats)].into_iter()).unwrap();
-        assert!(groups.policies.is_empty(), "invalid metric policy must be skipped");
-        let errs = groups.compilation_errors.get("bad-metric").expect("errors collected");
-        assert!(errs[0].starts_with("metric: match[0]: invalid regex"), "{}", errs[0]);
+        assert!(
+            groups.policies.is_empty(),
+            "invalid metric policy must be skipped"
+        );
+        let errs = groups
+            .compilation_errors
+            .get("bad-metric")
+            .expect("errors collected");
+        assert!(
+            errs[0].starts_with("metric: match[0]: invalid regex"),
+            "{}",
+            errs[0]
+        );
     }
 
     #[test]
@@ -2173,17 +2230,26 @@ mod tests {
         let stats = Arc::new(PolicyStats::default());
         let groups =
             PatternGroups::build_from_trace_policies([(policy, stats)].into_iter()).unwrap();
-        assert!(groups.policies.is_empty(), "invalid trace policy must be skipped");
-        let errs = groups.compilation_errors.get("bad-trace").expect("errors collected");
-        assert!(errs[0].starts_with("trace: match[0]: invalid regex"), "{}", errs[0]);
+        assert!(
+            groups.policies.is_empty(),
+            "invalid trace policy must be skipped"
+        );
+        let errs = groups
+            .compilation_errors
+            .get("bad-trace")
+            .expect("errors collected");
+        assert!(
+            errs[0].starts_with("trace: match[0]: invalid regex"),
+            "{}",
+            errs[0]
+        );
     }
 
     #[test]
     fn valid_regex_policy_has_no_compilation_errors() {
         let policy = make_log_policy_with_regex("ok", "error.*");
         let stats = Arc::new(PolicyStats::default());
-        let compiled =
-            CompiledMatchers::<LogSignal>::build([(policy, stats)].into_iter()).unwrap();
+        let compiled = CompiledMatchers::<LogSignal>::build([(policy, stats)].into_iter()).unwrap();
         assert_eq!(compiled.policies.len(), 1);
         assert!(compiled.compilation_errors.is_empty());
     }
