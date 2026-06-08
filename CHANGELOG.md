@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.7.0](https://github.com/usetero/policy-rs/compare/v1.6.0...v1.7.0) (2026-06-08)
+
+
+### Features
+
+* add poll_interval fallback to FileProvider ([#87](https://github.com/usetero/policy-rs/issues/87)) ([34d64a8](https://github.com/usetero/policy-rs/commit/34d64a81c528939811449f169d49003451c8ad9d))
+* add reference adapter (LogRecord, MetricRecord, SpanRecord) ([#89](https://github.com/usetero/policy-rs/issues/89)) ([1cca015](https://github.com/usetero/policy-rs/commit/1cca015f947fee19368adab8140d380243ad8462))
+* add resource_attributes, labels, and poll_interval to provider config ([#93](https://github.com/usetero/policy-rs/issues/93)) ([32d5fbc](https://github.com/usetero/policy-rs/commit/32d5fbc20881782a5f077a7a12874635b0dcea9c))
+* expose canonical enum-to-string helpers ([#86](https://github.com/usetero/policy-rs/issues/86)) ([2ffa3ed](https://github.com/usetero/policy-rs/commit/2ffa3ed43149f6da311180b72f53c5a341a811b6))
+* implement policy spec v1.5.0 — typed and numeric matchers ([#92](https://github.com/usetero/policy-rs/issues/92)) ([34c56bf](https://github.com/usetero/policy-rs/commit/34c56bf04729111c09f35313431acc7dd8980448))
+* make PolicyEngine eval methods synchronous ([#85](https://github.com/usetero/policy-rs/issues/85)) ([3e53cfb](https://github.com/usetero/policy-rs/commit/3e53cfb17044950051d70dc3a682bd0bc1ceeee0))
+* per-policy compilation errors instead of aborting batch ([#95](https://github.com/usetero/policy-rs/issues/95)) ([065dfdd](https://github.com/usetero/policy-rs/commit/065dfddbead0b75450fbb26e8acad11092996324))
+* use raw bytes for trace ID sampling instead of hex string conversion ([#94](https://github.com/usetero/policy-rs/issues/94)) ([d1dd3e3](https://github.com/usetero/policy-rs/commit/d1dd3e3c02c07e406a8d1306dc1f2e2de074da63))
+
+
+### Bug Fixes
+
+* prevent panic in parse_trace_id_randomness on malformed input ([#84](https://github.com/usetero/policy-rs/issues/84)) ([32f3776](https://github.com/usetero/policy-rs/commit/32f37761308a45df5d70d5cdacb1dd00edf4c1d3))
+
 ## [1.6.0](https://github.com/usetero/policy-rs/compare/v1.5.0...v1.6.0) (2026-05-13)
 
 
