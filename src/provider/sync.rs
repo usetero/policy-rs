@@ -11,7 +11,7 @@ pub fn stats_to_sync_status(id: String, stats: PolicyStatsSnapshot) -> PolicySyn
         id,
         match_hits: stats.match_hits as i64,
         match_misses: stats.match_misses as i64,
-        errors: vec![],
+        errors: stats.compilation_errors,
         remove: Some(TransformStageStatus {
             hits: stats.remove.0 as i64,
             misses: stats.remove.1 as i64,
