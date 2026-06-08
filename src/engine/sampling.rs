@@ -12,6 +12,7 @@
 
 use std::hash::Hasher;
 
+use crate::engine::compiled::TypedValue;
 use crate::field::TraceFieldSelector;
 use crate::proto::tero::policy::v1::TraceField;
 
@@ -86,25 +87,46 @@ pub(crate) fn encode_threshold(threshold: u64, precision: u32) -> String {
     truncated.trim_end_matches('0').to_string()
 }
 
+/// Parse 56-bit randomness from raw TraceID bytes.
+///
+/// The OTel TraceID is 16 bytes (128 bits). We take the least-significant
+/// 7 bytes (56 bits) as the randomness value. This is equivalent to
+/// `parse_trace_id_randomness` on the 32-char hex encoding but skips the
+/// hex decoding step.
+///
+/// Returns `None` for byte slices shorter than 7 bytes.
+pub(crate) fn parse_trace_id_randomness_bytes(bytes: &[u8]) -> Option<u64> {
+    let offset = bytes.len().checked_sub(7)?;
+    let tail = &bytes[offset..];
+    // Read up to 7 bytes as a big-endian u64 (zero-pad the leading byte).
+    let mut buf = [0u8; 8];
+    buf[8 - tail.len()..].copy_from_slice(tail);
+    Some(u64::from_be_bytes(buf) & RANDOMNESS_MASK)
+}
+
 /// Extract 56-bit randomness from a trace span for consistent probability sampling.
 ///
 /// Tries two sources in order:
 /// 1. The `rv` sub-key from the OTel tracestate entry
-/// 2. The least-significant 56 bits of the TraceID
+/// 2. The least-significant 56 bits of the TraceID — preferring raw bytes via
+///    `get_typed_value` and falling back to hex-string parsing for adapters
+///    that return `TraceId` as a string.
 pub(crate) fn extract_trace_randomness<T: Matchable<Signal = TraceSignal>>(
     span: &T,
 ) -> Option<u64> {
-    // Try tracestate rv first
+    // Try tracestate rv first (always a string field).
     if let Some(tracestate) = span.get_field(&TraceFieldSelector::Simple(TraceField::TraceState))
         && let Some(rv) = parse_tracestate_rv(&tracestate)
     {
         return Some(rv);
     }
-    // Fall back to TraceID least-significant 56 bits
-    if let Some(trace_id) = span.get_field(&TraceFieldSelector::Simple(TraceField::TraceId)) {
-        return parse_trace_id_randomness(&trace_id);
+    // Fall back to TraceID least-significant 56 bits — bytes preferred.
+    let selector = TraceFieldSelector::Simple(TraceField::TraceId);
+    match span.get_typed_value(&selector) {
+        Some(TypedValue::Bytes(b)) => parse_trace_id_randomness_bytes(b),
+        Some(TypedValue::String(s)) => parse_trace_id_randomness(&s),
+        _ => None,
     }
-    None
 }
 
 /// Parse the `rv` (randomness value) from an OTel tracestate entry.
@@ -185,12 +207,27 @@ pub(crate) fn threshold_to_probability(threshold: u64) -> f64 {
     1.0 - (threshold as f64 / MAX_THRESHOLD as f64)
 }
 
-/// Compute 56-bit randomness from a trace ID combined with a hash seed.
+/// Compute 56-bit randomness from raw TraceID bytes combined with a hash seed.
 ///
-/// When `hash_seed` is 0, this is equivalent to `parse_trace_id_randomness`
-/// (uses the least-significant 56 bits directly). When non-zero, the trace ID
-/// bytes are hashed together with the seed using FNV-1a to produce deterministic
-/// but seed-specific randomness.
+/// When `hash_seed` is 0, equivalent to `parse_trace_id_randomness_bytes`.
+/// When non-zero, the bytes are hashed with the seed using FNV-1a.
+pub(crate) fn hash_seed_randomness_bytes(trace_id_bytes: &[u8], hash_seed: u32) -> Option<u64> {
+    if hash_seed == 0 {
+        return parse_trace_id_randomness_bytes(trace_id_bytes);
+    }
+    if trace_id_bytes.len() < 7 {
+        return None;
+    }
+    let mut hasher = fnv::FnvHasher::default();
+    hasher.write(trace_id_bytes);
+    hasher.write_u32(hash_seed);
+    Some(hasher.finish() & RANDOMNESS_MASK)
+}
+
+/// Compute 56-bit randomness from a trace ID hex string combined with a hash seed.
+///
+/// Kept for adapters that represent `trace_id` as a hex string. Prefer
+/// `hash_seed_randomness_bytes` when raw bytes are available.
 pub(crate) fn hash_seed_randomness(trace_id: &str, hash_seed: u32) -> Option<u64> {
     if hash_seed == 0 {
         return parse_trace_id_randomness(trace_id);
@@ -208,7 +245,8 @@ pub(crate) fn hash_seed_randomness(trace_id: &str, hash_seed: u32) -> Option<u64
 ///
 /// Tries two sources in order:
 /// 1. The `rv` sub-key from the OTel tracestate entry (if hash_seed is 0)
-/// 2. The TraceID hashed with the seed
+/// 2. The TraceID hashed with the seed — raw bytes preferred via `get_typed_value`,
+///    falling back to hex-string for adapters that return TraceId as a string.
 ///
 /// When hash_seed is non-zero, the `rv` sub-key is ignored because the seed
 /// produces different randomness than the original trace ID randomness.
@@ -217,12 +255,14 @@ pub(crate) fn extract_hash_seed_randomness<T: Matchable<Signal = TraceSignal>>(
     hash_seed: u32,
 ) -> Option<u64> {
     if hash_seed == 0 {
-        // Seed 0 is compatible with standard OTel randomness
         return extract_trace_randomness(span);
     }
-    // Non-zero seed: hash the trace ID with the seed
-    let trace_id = span.get_field(&TraceFieldSelector::Simple(TraceField::TraceId))?;
-    hash_seed_randomness(&trace_id, hash_seed)
+    let selector = TraceFieldSelector::Simple(TraceField::TraceId);
+    match span.get_typed_value(&selector) {
+        Some(TypedValue::Bytes(b)) => hash_seed_randomness_bytes(b, hash_seed),
+        Some(TypedValue::String(s)) => hash_seed_randomness(&s, hash_seed),
+        _ => None,
+    }
 }
 
 /// Extract the incoming threshold from tracestate for proportional/equalizing modes.
@@ -484,6 +524,58 @@ mod tests {
         // Empty/short strings.
         assert_eq!(parse_trace_id_randomness(""), None);
         assert_eq!(parse_trace_id_randomness("short"), None);
+    }
+
+    #[test]
+    fn parse_trace_id_randomness_bytes_matches_string() {
+        // The bytes path must produce the same randomness as the string path.
+        let trace_id_hex = "0af7651916cd43dd8448eb211c80319c";
+        let trace_id_bytes: Vec<u8> = (0..trace_id_hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&trace_id_hex[i..i + 2], 16).unwrap())
+            .collect();
+
+        let from_str = parse_trace_id_randomness(trace_id_hex).unwrap();
+        let from_bytes = parse_trace_id_randomness_bytes(&trace_id_bytes).unwrap();
+        assert_eq!(from_str, from_bytes);
+    }
+
+    #[test]
+    fn parse_trace_id_randomness_bytes_short_returns_none() {
+        assert_eq!(parse_trace_id_randomness_bytes(&[]), None);
+        assert_eq!(parse_trace_id_randomness_bytes(&[0u8; 6]), None);
+    }
+
+    #[test]
+    fn hash_seed_randomness_bytes_seed_zero_matches_direct() {
+        let trace_id_hex = "0af7651916cd43dd8448eb211c80319c";
+        let bytes: Vec<u8> = (0..trace_id_hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&trace_id_hex[i..i + 2], 16).unwrap())
+            .collect();
+
+        let from_str = hash_seed_randomness(trace_id_hex, 0).unwrap();
+        let from_bytes = hash_seed_randomness_bytes(&bytes, 0).unwrap();
+        assert_eq!(from_str, from_bytes);
+    }
+
+    #[test]
+    fn hash_seed_randomness_bytes_nonzero_seed() {
+        let trace_id_hex = "0af7651916cd43dd8448eb211c80319c";
+        let bytes: Vec<u8> = (0..trace_id_hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&trace_id_hex[i..i + 2], 16).unwrap())
+            .collect();
+
+        // With non-zero seed, bytes and string produce different results
+        // (the string hasher sees ASCII hex, the bytes hasher sees raw bytes).
+        let from_str = hash_seed_randomness(trace_id_hex, 42).unwrap();
+        let from_bytes = hash_seed_randomness_bytes(&bytes, 42).unwrap();
+        // They are different — that's expected and correct.
+        assert_ne!(from_str, from_bytes);
+        // Both are valid 56-bit values.
+        assert!(from_str < MAX_THRESHOLD);
+        assert!(from_bytes < MAX_THRESHOLD);
     }
 
     // ==================== parse_tracestate_th tests ====================
