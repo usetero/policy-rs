@@ -833,4 +833,134 @@ mod tests {
         assert_eq!(p1_again.1.match_hits, 0);
         assert_eq!(p1_again.1.match_misses, 0);
     }
+
+    fn make_log_policy_with_invalid_regex(id: &str) -> Policy {
+        use crate::proto::tero::policy::v1::{
+            LogMatcher, LogTarget, Policy as ProtoPolicy, log_matcher,
+        };
+        let proto = ProtoPolicy {
+            id: id.to_string(),
+            name: id.to_string(),
+            enabled: true,
+            target: Some(crate::proto::tero::policy::v1::policy::Target::Log(
+                LogTarget {
+                    r#match: vec![LogMatcher {
+                        field: Some(log_matcher::Field::LogField(
+                            crate::proto::tero::policy::v1::LogField::Body.into(),
+                        )),
+                        r#match: Some(log_matcher::Match::Regex("([unclosed".to_string())),
+                        negate: false,
+                        case_insensitive: false,
+                    }],
+                    keep: "none".to_string(),
+                    transform: None,
+                    sample_key: None,
+                },
+            )),
+            ..Default::default()
+        };
+        Policy::new(proto)
+    }
+
+    #[test]
+    fn invalid_policy_compilation_errors_appear_in_snapshot() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+        handle.update(vec![make_log_policy_with_invalid_regex("broken")]);
+
+        let snapshot = registry.snapshot();
+        // The policy still appears in the snapshot even though it failed to compile.
+        assert!(snapshot.get("broken").is_some(), "invalid policy still in snapshot");
+        let errs = snapshot.compilation_errors_for("broken");
+        assert!(!errs.is_empty(), "compilation errors must be in snapshot");
+        assert!(
+            errs[0].contains("invalid regex"),
+            "error must describe the problem: {}", errs[0]
+        );
+    }
+
+    #[test]
+    fn invalid_policy_does_not_block_valid_peer() {
+        use crate::proto::tero::policy::v1::{
+            LogMatcher, LogTarget, Policy as ProtoPolicy, log_matcher,
+        };
+
+        let valid = Policy::new(ProtoPolicy {
+            id: "valid".to_string(),
+            name: "valid".to_string(),
+            enabled: true,
+            target: Some(crate::proto::tero::policy::v1::policy::Target::Log(
+                LogTarget {
+                    r#match: vec![LogMatcher {
+                        field: Some(log_matcher::Field::LogField(
+                            crate::proto::tero::policy::v1::LogField::Body.into(),
+                        )),
+                        r#match: Some(log_matcher::Match::Exact("error".to_string())),
+                        negate: false,
+                        case_insensitive: false,
+                    }],
+                    keep: "none".to_string(),
+                    transform: None,
+                    sample_key: None,
+                },
+            )),
+            ..Default::default()
+        });
+
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+        handle.update(vec![make_log_policy_with_invalid_regex("broken"), valid]);
+
+        let snapshot = registry.snapshot();
+        assert_eq!(snapshot.len(), 2, "both policies are in the snapshot");
+        // Valid policy compiles — compiled_log_matchers is Some with 1 policy
+        let matchers = snapshot
+            .compiled_log_matchers()
+            .expect("log matchers compiled despite broken peer");
+        assert_eq!(matchers.policies.len(), 1);
+        assert_eq!(matchers.policies[0].id, "valid");
+        // Broken policy has errors, valid does not
+        assert!(!snapshot.compilation_errors_for("broken").is_empty());
+        assert!(snapshot.compilation_errors_for("valid").is_empty());
+    }
+
+    #[test]
+    fn stats_collector_includes_compilation_errors() {
+        use crate::provider::{PolicyCallback, PolicyProvider, StatsCollector};
+        use std::sync::RwLock;
+
+        struct SpyProvider {
+            policies: Vec<Policy>,
+            collector: RwLock<Option<StatsCollector>>,
+        }
+        impl PolicyProvider for SpyProvider {
+            fn set_stats_collector(&self, c: StatsCollector) {
+                *self.collector.write().unwrap() = Some(c);
+            }
+            fn subscribe(&self, callback: PolicyCallback) -> Result<(), PolicyError> {
+                callback(self.policies.clone());
+                Ok(())
+            }
+        }
+
+        let provider = SpyProvider {
+            policies: vec![make_log_policy_with_invalid_regex("broken")],
+            collector: RwLock::new(None),
+        };
+
+        let registry = PolicyRegistry::new();
+        registry.subscribe(&provider).unwrap();
+
+        let collector = provider.collector.read().unwrap();
+        let stats = collector.as_ref().unwrap()();
+        let broken = stats.iter().find(|(id, _)| id == "broken").unwrap();
+        assert!(
+            !broken.1.compilation_errors.is_empty(),
+            "compilation errors must flow through stats collector"
+        );
+        assert!(
+            broken.1.compilation_errors[0].contains("invalid regex"),
+            "error text must be preserved: {}", broken.1.compilation_errors[0]
+        );
+    }
 }
