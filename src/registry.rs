@@ -101,6 +101,9 @@ impl PolicyStats {
     }
 
     /// Reset all stats (match + transform stages) and return previous values.
+    ///
+    /// `compilation_errors` is always empty here; the registry's stats collector
+    /// fills it in from the snapshot after calling this method.
     pub fn reset_all(&self) -> PolicyStatsSnapshot {
         PolicyStatsSnapshot {
             match_hits: self.match_hits.swap(0, Ordering::Relaxed),
@@ -109,6 +112,7 @@ impl PolicyStats {
             redact: self.redact.reset(),
             rename: self.rename.reset(),
             add: self.add.reset(),
+            compilation_errors: Vec::new(),
         }
     }
 }
@@ -122,6 +126,9 @@ pub struct PolicyStatsSnapshot {
     pub redact: (u64, u64),
     pub rename: (u64, u64),
     pub add: (u64, u64),
+    /// Compilation errors for this policy, if any.
+    /// Populated by the registry's stats collector from the current snapshot.
+    pub compilation_errors: Vec<String>,
 }
 
 /// A policy with its associated provider and stats.
@@ -155,6 +162,8 @@ struct SnapshotInner {
     compiled_metrics: Option<CompiledMatchers<MetricSignal>>,
     /// Compiled matchers for trace policies.
     compiled_traces: Option<CompiledMatchers<TraceSignal>>,
+    /// Per-policy compilation errors collected across all signal batches.
+    compilation_errors: HashMap<String, Vec<String>>,
 }
 
 impl PolicySnapshot {
@@ -167,8 +176,18 @@ impl PolicySnapshot {
                 compiled_logs: None,
                 compiled_metrics: None,
                 compiled_traces: None,
+                compilation_errors: HashMap::new(),
             }),
         }
+    }
+
+    /// Return the compilation errors for a policy, or an empty slice if none.
+    pub fn compilation_errors_for(&self, policy_id: &str) -> &[String] {
+        self.inner
+            .compilation_errors
+            .get(policy_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Get all policies.
@@ -334,10 +353,15 @@ impl RegistryInner {
         metric_policies.sort_by(|a, b| a.0.id().cmp(b.0.id()));
         trace_policies.sort_by(|a, b| a.0.id().cmp(b.0.id()));
 
+        let mut compilation_errors: HashMap<String, Vec<String>> = HashMap::new();
+
         // Compile log matchers
         let compiled_logs = if !log_policies.is_empty() {
             match CompiledMatchers::<LogSignal>::build(log_policies.into_iter()) {
-                Ok(matchers) => Some(matchers),
+                Ok(matchers) => {
+                    compilation_errors.extend(matchers.compilation_errors.clone());
+                    Some(matchers)
+                }
                 Err(e) => {
                     eprintln!("Failed to compile log policy matchers: {}", e);
                     None
@@ -350,7 +374,10 @@ impl RegistryInner {
         // Compile metric matchers
         let compiled_metrics = if !metric_policies.is_empty() {
             match CompiledMatchers::<MetricSignal>::build(metric_policies.into_iter()) {
-                Ok(matchers) => Some(matchers),
+                Ok(matchers) => {
+                    compilation_errors.extend(matchers.compilation_errors.clone());
+                    Some(matchers)
+                }
                 Err(e) => {
                     eprintln!("Failed to compile metric policy matchers: {}", e);
                     None
@@ -363,7 +390,10 @@ impl RegistryInner {
         // Compile trace matchers
         let compiled_traces = if !trace_policies.is_empty() {
             match CompiledMatchers::<TraceSignal>::build(trace_policies.into_iter()) {
-                Ok(matchers) => Some(matchers),
+                Ok(matchers) => {
+                    compilation_errors.extend(matchers.compilation_errors.clone());
+                    Some(matchers)
+                }
                 Err(e) => {
                     eprintln!("Failed to compile trace policy matchers: {}", e);
                     None
@@ -380,6 +410,7 @@ impl RegistryInner {
                 compiled_logs,
                 compiled_metrics,
                 compiled_traces,
+                compilation_errors,
             }),
         };
 
@@ -442,7 +473,13 @@ impl PolicyRegistry {
             let snapshot = inner.snapshot();
             snapshot
                 .iter()
-                .map(|entry| (entry.policy.id().to_string(), entry.stats.reset_all()))
+                .map(|entry| {
+                    let id = entry.policy.id().to_string();
+                    let mut stats = entry.stats.reset_all();
+                    stats.compilation_errors =
+                        snapshot.compilation_errors_for(&id).to_vec();
+                    (id, stats)
+                })
                 .collect()
         });
         provider.set_stats_collector(collector);

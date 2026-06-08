@@ -387,6 +387,9 @@ pub struct CompiledMatchers<S: Signal> {
     pub typed_checks: Vec<TypedCheck<S>>,
     /// Compiled policies indexed by position.
     pub policies: Vec<CompiledPolicy<S>>,
+    /// Per-policy compilation errors (policy_id → error strings).
+    /// Policies listed here were excluded from `policies` and are inert.
+    pub compilation_errors: HashMap<String, Vec<String>>,
 }
 
 impl CompiledMatchers<LogSignal> {
@@ -430,6 +433,9 @@ pub struct PatternGroups<S: Signal> {
     pub typed_checks: Vec<TypedCheck<S>>,
     /// Compiled policies.
     pub policies: Vec<CompiledPolicy<S>>,
+    /// Per-policy compilation errors (policy_id → error strings).
+    /// Policies with errors are excluded from `policies` and are inert.
+    pub compilation_errors: HashMap<String, Vec<String>>,
 }
 
 impl<S: Signal> Default for PatternGroups<S> {
@@ -439,48 +445,104 @@ impl<S: Signal> Default for PatternGroups<S> {
             existence_checks: Vec::new(),
             typed_checks: Vec::new(),
             policies: Vec::new(),
+            compilation_errors: HashMap::new(),
         }
     }
 }
 
 impl PatternGroups<LogSignal> {
     /// Build pattern groups from a list of log policies.
+    ///
+    /// Invalid policies are skipped and their errors recorded in
+    /// `compilation_errors` rather than aborting the whole batch.
+    /// Only system-level failures (e.g. OOM) return `Err`.
     pub fn build_from_log_policies(
         policies: impl Iterator<Item = (Policy, Arc<PolicyStats>)>,
     ) -> Result<Self, PolicyError> {
         let mut result = PatternGroups::default();
 
-        for (policy_index, (policy, stats)) in policies.enumerate() {
+        for (policy, stats) in policies {
             let log_target = match policy.log_target() {
                 Some(t) => t,
                 None => continue,
             };
 
+            let mut policy_errors: Vec<String> = Vec::new();
+
             if log_target.r#match.is_empty() {
-                return Err(PolicyError::InvalidPolicy {
-                    policy_id: policy.id().to_string(),
-                    reason: "log target must have at least one matcher".to_string(),
-                });
+                policy_errors.push("log: no matchers specified".to_string());
             }
 
-            let required_match_count = log_target.r#match.iter().filter(|m| !m.negate).count();
+            // Validate and extract fields; collect errors without aborting.
+            let mut extracted_fields: Vec<Option<LogFieldSelector>> =
+                Vec::with_capacity(log_target.r#match.len());
+            for (i, matcher) in log_target.r#match.iter().enumerate() {
+                let field = match extract_log_field(matcher) {
+                    Ok(f) => {
+                        if let Some(log_matcher::Match::Regex(pattern)) = &matcher.r#match {
+                            let flags = if matcher.case_insensitive {
+                                vectorscan_rs_sys::HS_FLAG_SINGLEMATCH
+                                    | vectorscan_rs_sys::HS_FLAG_CASELESS
+                            } else {
+                                vectorscan_rs_sys::HS_FLAG_SINGLEMATCH
+                            };
+                            match validate_vectorscan_pattern(pattern, flags) {
+                                Ok(()) => Some(f),
+                                Err(msg) => {
+                                    policy_errors.push(format!(
+                                        "log: match[{i}]: invalid regex \"{pattern}\": {msg}"
+                                    ));
+                                    None
+                                }
+                            }
+                        } else {
+                            Some(f)
+                        }
+                    }
+                    Err(e) => {
+                        policy_errors.push(format!("log: match[{i}]: {e}"));
+                        None
+                    }
+                };
+                extracted_fields.push(field);
+            }
 
-            let transform = log_target
+            let keep = match CompiledKeep::parse(&log_target.keep) {
+                Ok(k) => Some(k),
+                Err(e) => {
+                    policy_errors.push(format!("log: keep: {e}"));
+                    None
+                }
+            };
+
+            let transform_result = log_target
                 .transform
                 .as_ref()
                 .map(|t| CompiledTransform::from_proto(t, policy.id()))
-                .transpose()?
-                .filter(|t| !t.is_empty());
+                .transpose();
+            let transform = match transform_result {
+                Ok(t) => t.filter(|t| !t.is_empty()),
+                Err(e) => {
+                    policy_errors.push(format!("log: transform: {e}"));
+                    None
+                }
+            };
 
-            let sample_key = log_target
-                .sample_key
-                .as_ref()
-                .and_then(extract_log_sample_key);
+            if !policy_errors.is_empty() {
+                result
+                    .compilation_errors
+                    .insert(policy.id().to_string(), policy_errors);
+                continue;
+            }
+
+            let policy_index = result.policies.len();
+            let required_match_count = log_target.r#match.iter().filter(|m| !m.negate).count();
+            let sample_key = log_target.sample_key.as_ref().and_then(extract_log_sample_key);
 
             result.policies.push(CompiledPolicy {
                 id: policy.id().to_string(),
                 required_match_count,
-                keep: CompiledKeep::parse(&log_target.keep)?,
+                keep: keep.unwrap(),
                 transform,
                 stats,
                 enabled: policy.enabled(),
@@ -488,16 +550,12 @@ impl PatternGroups<LogSignal> {
                 trace_sampling: None,
             });
 
-            for matcher in &log_target.r#match {
-                let field = extract_log_field(matcher)?;
-                let is_negated = matcher.negate;
-                let case_insensitive = matcher.case_insensitive;
-
+            for (matcher, field) in log_target.r#match.iter().zip(extracted_fields) {
                 process_match_type(
                     matcher.r#match.as_ref(),
-                    field,
-                    is_negated,
-                    case_insensitive,
+                    field.unwrap(),
+                    matcher.negate,
+                    matcher.case_insensitive,
                     policy_index,
                     &mut result.groups,
                     &mut result.existence_checks,
@@ -512,26 +570,97 @@ impl PatternGroups<LogSignal> {
 
 impl PatternGroups<MetricSignal> {
     /// Build pattern groups from a list of metric policies.
+    ///
+    /// Invalid policies are skipped and their errors recorded in
+    /// `compilation_errors` rather than aborting the whole batch.
     pub fn build_from_metric_policies(
         policies: impl Iterator<Item = (Policy, Arc<PolicyStats>)>,
     ) -> Result<Self, PolicyError> {
         let mut result = PatternGroups::default();
 
-        for (policy_index, (policy, stats)) in policies.enumerate() {
+        for (policy, stats) in policies {
             let metric_target = match policy.metric_target() {
                 Some(t) => t,
                 None => continue,
             };
 
+            let mut policy_errors: Vec<String> = Vec::new();
+
             if metric_target.r#match.is_empty() {
-                return Err(PolicyError::InvalidPolicy {
-                    policy_id: policy.id().to_string(),
-                    reason: "metric target must have at least one matcher".to_string(),
-                });
+                policy_errors.push("metric: no matchers specified".to_string());
             }
 
-            let required_match_count = metric_target.r#match.iter().filter(|m| !m.negate).count();
+            struct ExtractedMatcher {
+                field: MetricFieldSelector,
+                synthesized_match: Option<metric_matcher::Match>,
+                is_negated: bool,
+                case_insensitive: bool,
+            }
 
+            let mut extracted: Vec<Option<ExtractedMatcher>> =
+                Vec::with_capacity(metric_target.r#match.len());
+            for (i, matcher) in metric_target.r#match.iter().enumerate() {
+                let item = match extract_metric_field(matcher) {
+                    Ok(ext) => {
+                        let raw_pattern = ext
+                            .synthesized_match
+                            .as_ref()
+                            .or(matcher.r#match.as_ref())
+                            .and_then(|m| {
+                                if let metric_matcher::Match::Regex(p) = m {
+                                    Some(p.as_str())
+                                } else {
+                                    None
+                                }
+                            });
+                        if let Some(pattern) = raw_pattern {
+                            let flags = if matcher.case_insensitive {
+                                vectorscan_rs_sys::HS_FLAG_SINGLEMATCH
+                                    | vectorscan_rs_sys::HS_FLAG_CASELESS
+                            } else {
+                                vectorscan_rs_sys::HS_FLAG_SINGLEMATCH
+                            };
+                            match validate_vectorscan_pattern(pattern, flags) {
+                                Ok(()) => Some(ExtractedMatcher {
+                                    field: ext.field,
+                                    synthesized_match: ext.synthesized_match,
+                                    is_negated: matcher.negate,
+                                    case_insensitive: matcher.case_insensitive,
+                                }),
+                                Err(msg) => {
+                                    policy_errors.push(format!(
+                                        "metric: match[{i}]: invalid regex \"{pattern}\": {msg}"
+                                    ));
+                                    None
+                                }
+                            }
+                        } else {
+                            Some(ExtractedMatcher {
+                                field: ext.field,
+                                synthesized_match: ext.synthesized_match,
+                                is_negated: matcher.negate,
+                                case_insensitive: matcher.case_insensitive,
+                            })
+                        }
+                    }
+                    Err(e) => {
+                        policy_errors.push(format!("metric: match[{i}]: {e}"));
+                        None
+                    }
+                };
+                extracted.push(item);
+            }
+
+            if !policy_errors.is_empty() {
+                result
+                    .compilation_errors
+                    .insert(policy.id().to_string(), policy_errors);
+                continue;
+            }
+
+            let policy_index = result.policies.len();
+            let required_match_count =
+                metric_target.r#match.iter().filter(|m| !m.negate).count();
             let keep = if metric_target.keep {
                 CompiledKeep::All
             } else {
@@ -549,23 +678,14 @@ impl PatternGroups<MetricSignal> {
                 trace_sampling: None,
             });
 
-            for matcher in &metric_target.r#match {
-                let is_negated = matcher.negate;
-                let case_insensitive = matcher.case_insensitive;
-
-                let extraction = extract_metric_field(matcher)?;
-
-                // Use synthesized match for enum fields, otherwise use the matcher's match.
-                let match_type = extraction
-                    .synthesized_match
-                    .as_ref()
-                    .or(matcher.r#match.as_ref());
-
+            for (matcher, ext) in metric_target.r#match.iter().zip(extracted) {
+                let ext = ext.unwrap();
+                let match_type = ext.synthesized_match.as_ref().or(matcher.r#match.as_ref());
                 process_match_type(
                     match_type,
-                    extraction.field,
-                    is_negated,
-                    case_insensitive,
+                    ext.field,
+                    ext.is_negated,
+                    ext.case_insensitive,
                     policy_index,
                     &mut result.groups,
                     &mut result.existence_checks,
@@ -580,26 +700,96 @@ impl PatternGroups<MetricSignal> {
 
 impl PatternGroups<TraceSignal> {
     /// Build pattern groups from a list of trace policies.
+    ///
+    /// Invalid policies are skipped and their errors recorded in
+    /// `compilation_errors` rather than aborting the whole batch.
     pub fn build_from_trace_policies(
         policies: impl Iterator<Item = (Policy, Arc<PolicyStats>)>,
     ) -> Result<Self, PolicyError> {
         let mut result = PatternGroups::default();
 
-        for (policy_index, (policy, stats)) in policies.enumerate() {
+        for (policy, stats) in policies {
             let trace_target = match policy.trace_target() {
                 Some(t) => t,
                 None => continue,
             };
 
+            let mut policy_errors: Vec<String> = Vec::new();
+
             if trace_target.r#match.is_empty() {
-                return Err(PolicyError::InvalidPolicy {
-                    policy_id: policy.id().to_string(),
-                    reason: "trace target must have at least one matcher".to_string(),
-                });
+                policy_errors.push("trace: no matchers specified".to_string());
             }
 
-            let required_match_count = trace_target.r#match.iter().filter(|m| !m.negate).count();
+            struct ExtractedMatcher {
+                field: TraceFieldSelector,
+                synthesized_match: Option<trace_matcher::Match>,
+                is_negated: bool,
+                case_insensitive: bool,
+            }
 
+            let mut extracted: Vec<Option<ExtractedMatcher>> =
+                Vec::with_capacity(trace_target.r#match.len());
+            for (i, matcher) in trace_target.r#match.iter().enumerate() {
+                let item = match extract_trace_field(matcher) {
+                    Ok(ext) => {
+                        let raw_pattern = ext
+                            .synthesized_match
+                            .as_ref()
+                            .or(matcher.r#match.as_ref())
+                            .and_then(|m| {
+                                if let trace_matcher::Match::Regex(p) = m {
+                                    Some(p.as_str())
+                                } else {
+                                    None
+                                }
+                            });
+                        if let Some(pattern) = raw_pattern {
+                            let flags = if matcher.case_insensitive {
+                                vectorscan_rs_sys::HS_FLAG_SINGLEMATCH
+                                    | vectorscan_rs_sys::HS_FLAG_CASELESS
+                            } else {
+                                vectorscan_rs_sys::HS_FLAG_SINGLEMATCH
+                            };
+                            match validate_vectorscan_pattern(pattern, flags) {
+                                Ok(()) => Some(ExtractedMatcher {
+                                    field: ext.field,
+                                    synthesized_match: ext.synthesized_match,
+                                    is_negated: matcher.negate,
+                                    case_insensitive: matcher.case_insensitive,
+                                }),
+                                Err(msg) => {
+                                    policy_errors.push(format!(
+                                        "trace: match[{i}]: invalid regex \"{pattern}\": {msg}"
+                                    ));
+                                    None
+                                }
+                            }
+                        } else {
+                            Some(ExtractedMatcher {
+                                field: ext.field,
+                                synthesized_match: ext.synthesized_match,
+                                is_negated: matcher.negate,
+                                case_insensitive: matcher.case_insensitive,
+                            })
+                        }
+                    }
+                    Err(e) => {
+                        policy_errors.push(format!("trace: match[{i}]: {e}"));
+                        None
+                    }
+                };
+                extracted.push(item);
+            }
+
+            if !policy_errors.is_empty() {
+                result
+                    .compilation_errors
+                    .insert(policy.id().to_string(), policy_errors);
+                continue;
+            }
+
+            let policy_index = result.policies.len();
+            let required_match_count = trace_target.r#match.iter().filter(|m| !m.negate).count();
             let keep = compile_trace_keep(trace_target.keep.as_ref());
             let trace_sampling = compile_trace_sampling(trace_target.keep.as_ref());
 
@@ -614,22 +804,14 @@ impl PatternGroups<TraceSignal> {
                 trace_sampling: Some(trace_sampling),
             });
 
-            for matcher in &trace_target.r#match {
-                let is_negated = matcher.negate;
-                let case_insensitive = matcher.case_insensitive;
-
-                let extraction = extract_trace_field(matcher)?;
-
-                let match_type = extraction
-                    .synthesized_match
-                    .as_ref()
-                    .or(matcher.r#match.as_ref());
-
+            for (matcher, ext) in trace_target.r#match.iter().zip(extracted) {
+                let ext = ext.unwrap();
+                let match_type = ext.synthesized_match.as_ref().or(matcher.r#match.as_ref());
                 process_match_type(
                     match_type,
-                    extraction.field,
-                    is_negated,
-                    case_insensitive,
+                    ext.field,
+                    ext.is_negated,
+                    ext.case_insensitive,
                     policy_index,
                     &mut result.groups,
                     &mut result.existence_checks,
@@ -687,6 +869,7 @@ impl<S: Signal> PatternGroups<S> {
             existence_checks: self.existence_checks,
             typed_checks: self.typed_checks,
             policies: self.policies,
+            compilation_errors: self.compilation_errors,
         })
     }
 }
@@ -828,6 +1011,52 @@ fn hex_decode(hex: &str) -> Option<Vec<u8>> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
         .collect()
+}
+
+/// Validate a regex pattern against the Vectorscan compiler.
+///
+/// Returns `Ok(())` if the pattern compiles successfully, or `Err(message)`
+/// with the compiler's error description. This is used at policy-compilation
+/// time to reject invalid patterns before they reach `hs_compile_multi`.
+fn validate_vectorscan_pattern(pattern: &str, flags: u32) -> Result<(), String> {
+    let c_pattern = CString::new(pattern)
+        .map_err(|e| format!("pattern contains null byte: {e}"))?;
+    let mut db: *mut vectorscan_rs_sys::hs_database_t = ptr::null_mut();
+    let mut compile_error: *mut vectorscan_rs_sys::hs_compile_error_t = ptr::null_mut();
+
+    let result = unsafe {
+        vectorscan_rs_sys::hs_compile(
+            c_pattern.as_ptr(),
+            flags,
+            vectorscan_rs_sys::HS_MODE_BLOCK,
+            ptr::null(),
+            &mut db,
+            &mut compile_error,
+        )
+    };
+
+    if result == vectorscan_rs_sys::HS_SUCCESS as i32 {
+        unsafe { vectorscan_rs_sys::hs_free_database(db) };
+        Ok(())
+    } else {
+        let msg = if !compile_error.is_null() {
+            let s = unsafe {
+                let msg_ptr = (*compile_error).message;
+                if msg_ptr.is_null() {
+                    "unknown error".to_string()
+                } else {
+                    std::ffi::CStr::from_ptr(msg_ptr)
+                        .to_string_lossy()
+                        .into_owned()
+                }
+            };
+            unsafe { vectorscan_rs_sys::hs_free_compile_error(compile_error) };
+            s
+        } else {
+            format!("compile failed with code {result}")
+        };
+        Err(msg)
+    }
 }
 
 impl MatchTypeAccessor for log_matcher::Match {
@@ -1682,7 +1911,7 @@ mod tests {
     }
 
     #[test]
-    fn build_from_log_policies_empty_match_list_rejected() {
+    fn build_from_log_policies_empty_match_list_collected() {
         let log_target = LogTarget {
             r#match: Vec::new(),
             keep: "all".to_string(),
@@ -1700,16 +1929,16 @@ mod tests {
         };
         let policy = Policy::new(proto);
         let stats = Arc::new(PolicyStats::default());
-        let err =
-            PatternGroups::build_from_log_policies([(policy, stats)].into_iter()).unwrap_err();
-        assert!(matches!(
-            err,
-            PolicyError::InvalidPolicy { ref policy_id, .. } if policy_id == "no-matchers"
-        ));
+        let groups =
+            PatternGroups::build_from_log_policies([(policy, stats)].into_iter()).unwrap();
+        assert!(groups.policies.is_empty(), "invalid policy should be skipped");
+        let errs = groups.compilation_errors.get("no-matchers").expect("errors collected");
+        assert!(!errs.is_empty());
+        assert!(errs[0].contains("no matchers"), "error should mention matchers: {}", errs[0]);
     }
 
     #[test]
-    fn build_from_metric_policies_empty_match_list_rejected() {
+    fn build_from_metric_policies_empty_match_list_collected() {
         use crate::proto::tero::policy::v1::MetricTarget;
         let metric_target = MetricTarget {
             r#match: Vec::new(),
@@ -1726,16 +1955,15 @@ mod tests {
         };
         let policy = Policy::new(proto);
         let stats = Arc::new(PolicyStats::default());
-        let err =
-            PatternGroups::build_from_metric_policies([(policy, stats)].into_iter()).unwrap_err();
-        assert!(matches!(
-            err,
-            PolicyError::InvalidPolicy { ref policy_id, .. } if policy_id == "metric-no-matchers"
-        ));
+        let groups =
+            PatternGroups::build_from_metric_policies([(policy, stats)].into_iter()).unwrap();
+        assert!(groups.policies.is_empty(), "invalid policy should be skipped");
+        let errs = groups.compilation_errors.get("metric-no-matchers").expect("errors collected");
+        assert!(!errs.is_empty());
     }
 
     #[test]
-    fn build_from_trace_policies_empty_match_list_rejected() {
+    fn build_from_trace_policies_empty_match_list_collected() {
         use crate::proto::tero::policy::v1::TraceTarget;
         let trace_target = TraceTarget {
             r#match: Vec::new(),
@@ -1752,11 +1980,14 @@ mod tests {
         };
         let policy = Policy::new(proto);
         let stats = Arc::new(PolicyStats::default());
-        let err =
-            PatternGroups::build_from_trace_policies([(policy, stats)].into_iter()).unwrap_err();
-        assert!(matches!(
-            err,
-            PolicyError::InvalidPolicy { ref policy_id, .. } if policy_id == "trace-no-matchers"
+        let groups =
+            PatternGroups::build_from_trace_policies([(policy, stats)].into_iter()).unwrap();
+        assert!(groups.policies.is_empty(), "invalid policy should be skipped");
+        let errs = groups
+            .compilation_errors
+            .get("trace-no-matchers")
+            .expect("errors collected");
+        assert!(!errs.is_empty(
         ));
     }
 }
