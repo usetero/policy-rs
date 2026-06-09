@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.1](https://github.com/usetero/policy-rs/compare/v1.7.0...v1.7.1) (2026-06-09)
+
+
+### Bug Fixes
+
+* validate empty attribute paths during policy compilation ([#96](https://github.com/usetero/policy-rs/issues/96)) ([5f60682](https://github.com/usetero/policy-rs/commit/5f60682bacbb7a0444961ae8dd5b7ffaa3c87d8c))
+
 ## [1.7.0](https://github.com/usetero/policy-rs/compare/v1.6.0...v1.7.0) (2026-06-08)
 
 
