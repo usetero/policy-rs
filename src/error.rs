@@ -23,9 +23,6 @@ pub enum PolicyError {
     /// Invalid keep expression
     InvalidKeepExpression { expression: String, reason: String },
 
-    /// Field selection error
-    FieldError { reason: String },
-
     /// Failed to compile Hyperscan database
     CompileError { reason: String },
 
@@ -56,9 +53,6 @@ impl std::fmt::Display for PolicyError {
             }
             PolicyError::InvalidKeepExpression { expression, reason } => {
                 write!(f, "invalid keep expression '{}': {}", expression, reason)
-            }
-            PolicyError::FieldError { reason } => {
-                write!(f, "field error: {}", reason)
             }
             PolicyError::CompileError { reason } => {
                 write!(f, "failed to compile Hyperscan database: {}", reason)
