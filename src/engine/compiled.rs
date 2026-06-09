@@ -1106,24 +1106,31 @@ impl MatchTypeAccessor for trace_matcher::Match {
 // =============================================================================
 
 /// Extract the field selector from a log matcher.
-fn extract_log_field(matcher: &LogMatcher) -> Result<LogFieldSelector, PolicyError> {
+fn extract_log_field(matcher: &LogMatcher) -> Result<LogFieldSelector, String> {
     match &matcher.field {
         Some(log_matcher::Field::LogField(f)) => {
             let field = LogField::try_from(*f).unwrap_or(LogField::Unspecified);
             Ok(LogFieldSelector::Simple(field))
         }
         Some(log_matcher::Field::LogAttribute(path)) => {
+            if path.path.is_empty() {
+                return Err("attribute has empty path".to_string());
+            }
             Ok(LogFieldSelector::from_log_attribute(path))
         }
         Some(log_matcher::Field::ResourceAttribute(path)) => {
+            if path.path.is_empty() {
+                return Err("attribute has empty path".to_string());
+            }
             Ok(LogFieldSelector::from_resource_attribute(path))
         }
         Some(log_matcher::Field::ScopeAttribute(path)) => {
+            if path.path.is_empty() {
+                return Err("attribute has empty path".to_string());
+            }
             Ok(LogFieldSelector::from_scope_attribute(path))
         }
-        None => Err(PolicyError::FieldError {
-            reason: "matcher has no field specified".to_string(),
-        }),
+        None => Err("matcher has no field specified".to_string()),
     }
 }
 
@@ -1164,7 +1171,7 @@ struct MetricFieldExtraction {
     synthesized_match: Option<metric_matcher::Match>,
 }
 
-fn extract_metric_field(matcher: &MetricMatcher) -> Result<MetricFieldExtraction, PolicyError> {
+fn extract_metric_field(matcher: &MetricMatcher) -> Result<MetricFieldExtraction, String> {
     match &matcher.field {
         Some(metric_matcher::Field::MetricField(f)) => {
             let field = MetricField::try_from(*f).unwrap_or(MetricField::Unspecified);
@@ -1173,18 +1180,33 @@ fn extract_metric_field(matcher: &MetricMatcher) -> Result<MetricFieldExtraction
                 synthesized_match: None,
             })
         }
-        Some(metric_matcher::Field::DatapointAttribute(path)) => Ok(MetricFieldExtraction {
-            field: MetricFieldSelector::from_datapoint_attribute(path),
-            synthesized_match: None,
-        }),
-        Some(metric_matcher::Field::ResourceAttribute(path)) => Ok(MetricFieldExtraction {
-            field: MetricFieldSelector::from_resource_attribute(path),
-            synthesized_match: None,
-        }),
-        Some(metric_matcher::Field::ScopeAttribute(path)) => Ok(MetricFieldExtraction {
-            field: MetricFieldSelector::from_scope_attribute(path),
-            synthesized_match: None,
-        }),
+        Some(metric_matcher::Field::DatapointAttribute(path)) => {
+            if path.path.is_empty() {
+                return Err("attribute has empty path".to_string());
+            }
+            Ok(MetricFieldExtraction {
+                field: MetricFieldSelector::from_datapoint_attribute(path),
+                synthesized_match: None,
+            })
+        }
+        Some(metric_matcher::Field::ResourceAttribute(path)) => {
+            if path.path.is_empty() {
+                return Err("attribute has empty path".to_string());
+            }
+            Ok(MetricFieldExtraction {
+                field: MetricFieldSelector::from_resource_attribute(path),
+                synthesized_match: None,
+            })
+        }
+        Some(metric_matcher::Field::ScopeAttribute(path)) => {
+            if path.path.is_empty() {
+                return Err("attribute has empty path".to_string());
+            }
+            Ok(MetricFieldExtraction {
+                field: MetricFieldSelector::from_scope_attribute(path),
+                synthesized_match: None,
+            })
+        }
         Some(metric_matcher::Field::MetricType(t)) => {
             let metric_type = MetricType::try_from(*t).unwrap_or(MetricType::Unspecified);
             Ok(MetricFieldExtraction {
@@ -1204,9 +1226,7 @@ fn extract_metric_field(matcher: &MetricMatcher) -> Result<MetricFieldExtraction
                 )),
             })
         }
-        None => Err(PolicyError::FieldError {
-            reason: "matcher has no field specified".to_string(),
-        }),
+        None => Err("matcher has no field specified".to_string()),
     }
 }
 
@@ -1224,7 +1244,7 @@ struct TraceFieldExtraction {
     synthesized_match: Option<trace_matcher::Match>,
 }
 
-fn extract_trace_field(matcher: &TraceMatcher) -> Result<TraceFieldExtraction, PolicyError> {
+fn extract_trace_field(matcher: &TraceMatcher) -> Result<TraceFieldExtraction, String> {
     match &matcher.field {
         Some(trace_matcher::Field::TraceField(f)) => {
             let field = TraceField::try_from(*f).unwrap_or(TraceField::Unspecified);
@@ -1233,18 +1253,33 @@ fn extract_trace_field(matcher: &TraceMatcher) -> Result<TraceFieldExtraction, P
                 synthesized_match: None,
             })
         }
-        Some(trace_matcher::Field::SpanAttribute(path)) => Ok(TraceFieldExtraction {
-            field: TraceFieldSelector::from_span_attribute(path),
-            synthesized_match: None,
-        }),
-        Some(trace_matcher::Field::ResourceAttribute(path)) => Ok(TraceFieldExtraction {
-            field: TraceFieldSelector::from_resource_attribute(path),
-            synthesized_match: None,
-        }),
-        Some(trace_matcher::Field::ScopeAttribute(path)) => Ok(TraceFieldExtraction {
-            field: TraceFieldSelector::from_scope_attribute(path),
-            synthesized_match: None,
-        }),
+        Some(trace_matcher::Field::SpanAttribute(path)) => {
+            if path.path.is_empty() {
+                return Err("attribute has empty path".to_string());
+            }
+            Ok(TraceFieldExtraction {
+                field: TraceFieldSelector::from_span_attribute(path),
+                synthesized_match: None,
+            })
+        }
+        Some(trace_matcher::Field::ResourceAttribute(path)) => {
+            if path.path.is_empty() {
+                return Err("attribute has empty path".to_string());
+            }
+            Ok(TraceFieldExtraction {
+                field: TraceFieldSelector::from_resource_attribute(path),
+                synthesized_match: None,
+            })
+        }
+        Some(trace_matcher::Field::ScopeAttribute(path)) => {
+            if path.path.is_empty() {
+                return Err("attribute has empty path".to_string());
+            }
+            Ok(TraceFieldExtraction {
+                field: TraceFieldSelector::from_scope_attribute(path),
+                synthesized_match: None,
+            })
+        }
         Some(trace_matcher::Field::SpanKind(k)) => {
             let kind = SpanKind::try_from(*k).unwrap_or(SpanKind::Unspecified);
             Ok(TraceFieldExtraction {
@@ -1267,17 +1302,20 @@ fn extract_trace_field(matcher: &TraceMatcher) -> Result<TraceFieldExtraction, P
             field: TraceFieldSelector::EventName,
             synthesized_match: Some(trace_matcher::Match::Exact(name.clone())),
         }),
-        Some(trace_matcher::Field::EventAttribute(path)) => Ok(TraceFieldExtraction {
-            field: TraceFieldSelector::from_event_attribute(path),
-            synthesized_match: None,
-        }),
+        Some(trace_matcher::Field::EventAttribute(path)) => {
+            if path.path.is_empty() {
+                return Err("attribute has empty path".to_string());
+            }
+            Ok(TraceFieldExtraction {
+                field: TraceFieldSelector::from_event_attribute(path),
+                synthesized_match: None,
+            })
+        }
         Some(trace_matcher::Field::LinkTraceId(id)) => Ok(TraceFieldExtraction {
             field: TraceFieldSelector::LinkTraceId,
             synthesized_match: Some(trace_matcher::Match::Exact(id.clone())),
         }),
-        None => Err(PolicyError::FieldError {
-            reason: "matcher has no field specified".to_string(),
-        }),
+        None => Err("matcher has no field specified".to_string()),
     }
 }
 
