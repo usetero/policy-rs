@@ -34,10 +34,10 @@ tokio = { version = "1", features = ["rt", "sync", "time"] }
 tonic = { version = "0.12", optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.8", features = ["async_tokio"] }
-dotenvy = "0.15"
-tempfile = "3"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+criterion = { version = "=0.8.2", features = ["async_tokio"] }
+dotenvy = "=0.15.7"
+tempfile = "=3.27.0"
+tokio = { version = "=1.53.1", features = ["rt", "rt-multi-thread", "macros"] }
 
 [[bench]]
 name = "engine"
