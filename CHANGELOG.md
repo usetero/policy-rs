@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.8.0](https://github.com/usetero/policy-rs/compare/v1.7.1...v1.8.0) (2026-08-05)
+
+
+### Features
+
+* support policy v1.7.1 ([#101](https://github.com/usetero/policy-rs/issues/101)) ([af8bfd4](https://github.com/usetero/policy-rs/commit/af8bfd4fdcb8ed4c6e3f52ebda8ad5dfced269ad))
+
+
+### Bug Fixes
+
+* update lots of deps ([#103](https://github.com/usetero/policy-rs/issues/103)) ([2ebe31d](https://github.com/usetero/policy-rs/commit/2ebe31dc300c23e6fc75ac92d58f7aef9bccd2ce))
+
 ## [1.7.1](https://github.com/usetero/policy-rs/compare/v1.7.0...v1.7.1) (2026-06-09)
 
 
