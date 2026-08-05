@@ -52,6 +52,6 @@ name = "grpc_provider"
 required-features = ["grpc"]
 
 [build-dependencies]
-pbjson-build = "0.7"
+pbjson-build = "0.9"
 prost-build = "0.13"
 tonic-build = "0.12"
