@@ -128,9 +128,7 @@ Counters reset **on read**, whether or not the sync carrying them succeeds, whic
 is the rule `match_hits`/`match_misses` already follow. A failed sync drops its
 interval from numerator and denominator alike rather than replaying it — the
 server cannot tell a replay from new telemetry. Reported volume is therefore a
-lower bound, not an exact total. Volume not yet read into a request is untouched
-by a failure, so the gRPC provider (which connects before building its request)
-loses nothing when a connection fails.
+lower bound, not an exact total.
 
 ---
 

@@ -186,10 +186,11 @@ impl GrpcProvider {
 
     /// Perform a single sync operation.
     async fn sync(&self, full_sync: bool) -> Result<Vec<Policy>, PolicyError> {
+        let sync_request = self.build_sync_request(full_sync);
+
         let channel = self.create_channel().await?;
         let mut client = PolicyServiceClient::new(channel);
 
-        let sync_request = self.build_sync_request(full_sync);
         let request = self.create_request(sync_request);
 
         let response = client
@@ -258,17 +259,6 @@ impl GrpcProvider {
                 interval_timer.tick().await;
 
                 let result = async {
-                    // Create channel
-                    let endpoint = Endpoint::from_shared(config.url.clone())
-                        .map_err(|e| PolicyError::GrpcError(format!("Invalid URL: {}", e)))?;
-
-                    let channel = endpoint
-                        .connect()
-                        .await
-                        .map_err(|e| PolicyError::GrpcError(format!("Connection failed: {}", e)))?;
-
-                    let mut client = PolicyServiceClient::new(channel);
-
                     // Build request
                     let last_hash_val = last_hash_clone.read().unwrap().clone().unwrap_or_default();
                     let last_timestamp = *last_sync_timestamp_clone.read().unwrap();
@@ -283,6 +273,17 @@ impl GrpcProvider {
                         policy_statuses,
                         volume,
                     };
+
+                    // Create channel
+                    let endpoint = Endpoint::from_shared(config.url.clone())
+                        .map_err(|e| PolicyError::GrpcError(format!("Invalid URL: {}", e)))?;
+
+                    let channel = endpoint
+                        .connect()
+                        .await
+                        .map_err(|e| PolicyError::GrpcError(format!("Connection failed: {}", e)))?;
+
+                    let mut client = PolicyServiceClient::new(channel);
 
                     let mut request = Request::new(sync_request);
                     for (key, value) in &config.headers {
@@ -430,16 +431,16 @@ mod tests {
         assert!(provider.build_sync_request(true).volume.is_none());
     }
 
-    /// Counters reset when read into a request, so a failure *before* the
-    /// request is built — this provider connects first — leaves them intact.
-    /// Once drained, a delta is never replayed; that is
-    /// [`super::sync::collect_volume`]'s contract.
     #[tokio::test]
-    async fn failed_connect_leaves_volume_unread() {
+    async fn failed_sync_does_not_replay_volume() {
         let (provider, tracker) = unreachable_provider();
         tracker.record_span();
+        tracker.add_span_bytes(11);
 
         assert!(provider.sync(true).await.is_err());
-        assert_eq!(tracker.collect().unwrap().spans, 1);
+
+        // The delta went out with the failed request and is not replayed: the
+        // server cannot tell a replay from new telemetry.
+        assert!(tracker.collect().is_none());
     }
 }
