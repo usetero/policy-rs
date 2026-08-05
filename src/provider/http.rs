@@ -16,7 +16,7 @@ use crate::error::PolicyError;
 use crate::policy::Policy;
 use crate::proto::tero::policy::v1::{ClientMetadata, SyncRequest, SyncResponse};
 
-use super::sync::{collect_policy_statuses, collect_volume, return_volume};
+use super::sync::{collect_policy_statuses, collect_volume};
 use super::{PolicyCallback, PolicyProvider, StatsCollector};
 use crate::volume::VolumeTracker;
 
@@ -179,19 +179,7 @@ impl HttpProvider {
     /// Perform a single sync operation.
     async fn sync(&self, full_sync: bool) -> Result<Vec<Policy>, PolicyError> {
         let request = self.build_sync_request(full_sync);
-        let drained = request.volume;
 
-        let result = self.send_sync(request).await;
-        if result.is_err() {
-            // Unless the sync succeeds, the volume it drained goes back to the
-            // registry for the next attempt to report.
-            return_volume(&self.volume_tracker.read().unwrap(), drained);
-        }
-        result
-    }
-
-    /// Send an already-built sync request and decode the response.
-    async fn send_sync(&self, request: SyncRequest) -> Result<Vec<Policy>, PolicyError> {
         // Build HTTP request
         let mut http_request = self.client.post(&self.config.url);
 
@@ -335,7 +323,6 @@ impl HttpProvider {
                         volume,
                     }
                 };
-                let drained = request.volume;
 
                 first = false;
 
@@ -421,10 +408,6 @@ impl HttpProvider {
                     Ok((new_hash, policies))
                 }
                 .await;
-
-                if result.is_err() {
-                    return_volume(&volume_tracker, drained);
-                }
 
                 if tx.send(result).await.is_err() {
                     break; // Receiver dropped
@@ -524,16 +507,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_sync_returns_drained_volume() {
+    async fn failed_sync_does_not_replay_volume() {
         let (provider, tracker) = unreachable_provider();
         tracker.record_log();
         tracker.add_log_bytes(400);
 
         assert!(provider.sync(true).await.is_err());
 
-        // Retained, so the next attempt reports it.
-        let volume = tracker.collect().unwrap();
-        assert_eq!(volume.log_records, 1);
-        assert_eq!(volume.log_bytes, 400);
+        // The delta went out with the failed request and is not replayed: the
+        // server cannot tell a replay from new telemetry.
+        assert!(tracker.collect().is_none());
     }
 }

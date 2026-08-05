@@ -333,8 +333,9 @@ engine.evaluate(&registry.snapshot(), &record)?;            // counts the record
 ```
 
 The HTTP and gRPC providers report volume in their sync requests automatically,
-resetting the counters once a sync succeeds and carrying them forward when one
-fails. To read it directly, use `registry.volume().collect()`.
+resetting the counters as they are read into a request — a failed sync drops its
+interval rather than replaying it, so reported volume is a lower bound. To read
+it directly, use `registry.volume().collect()`.
 
 ### Multiple Providers
 

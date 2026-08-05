@@ -35,19 +35,10 @@ pub fn stats_to_sync_status(id: String, stats: PolicyStatsSnapshot) -> PolicySyn
 }
 
 /// Drain observed volume into a sync request, or `None` if there is nothing to
-/// report. Each drain is a disjoint delta, so overlapping syncs never report the
-/// same volume twice — but a sync that fails must hand its delta back with
-/// [`return_volume`].
+/// report. Counters reset on read, whether or not the sync then succeeds, so a
+/// delta is reported at most once and never replayed.
 pub fn collect_volume(tracker: &Option<Arc<VolumeTracker>>) -> Option<VolumeStats> {
     tracker.as_ref().and_then(|t| t.collect())
-}
-
-/// Hand a drained delta back after a failed sync, so the next request reports
-/// it. The spec requires the counters to be retained, not dropped.
-pub fn return_volume(tracker: &Option<Arc<VolumeTracker>>, drained: Option<VolumeStats>) {
-    if let (Some(tracker), Some(drained)) = (tracker, drained) {
-        tracker.add(drained);
-    }
 }
 
 /// Collect policy statuses from a stats collector.

@@ -18,8 +18,7 @@ use crate::proto::tero::policy::v1::VolumeStats;
 /// Counts telemetry entering policy evaluation, regardless of policy match.
 ///
 /// Reachable from a registry via [`PolicyRegistry::volume()`], which is also how
-/// the HTTP and gRPC providers report it: they drain the counters into each sync
-/// request and hand the delta back if the sync fails.
+/// the HTTP and gRPC providers report it: each sync request drains the counters.
 ///
 /// Counting happens before the keep and transform stages, so dropped,
 /// sampled-out, and redacted records are all included at their pre-policy size.
@@ -92,9 +91,10 @@ impl VolumeTracker {
     /// last call.
     ///
     /// Returns `None` when nothing has been observed — the spec says to omit
-    /// `volume` rather than send a zero-valued message. Overlapping syncs each
-    /// drain a disjoint delta, so nothing is reported twice. A sync that then
-    /// fails must hand its delta back with [`Self::add`].
+    /// `volume` rather than send a zero-valued message. Counters reset on read
+    /// whether or not the sync carrying them succeeds: a failed sync drops its
+    /// interval rather than replaying it, since the server cannot tell a replay
+    /// from new telemetry. Reported volume is a lower bound, not an exact total.
     pub fn collect(&self) -> Option<VolumeStats> {
         let stats = VolumeStats {
             log_records: self.log_records.swap(0, Ordering::Relaxed),
@@ -106,21 +106,6 @@ impl VolumeTracker {
         };
 
         (stats != VolumeStats::default()).then_some(stats)
-    }
-
-    /// Fold a drained delta back into the counters, so a sync that failed after
-    /// [`Self::collect`] doesn't lose what it was carrying.
-    pub fn add(&self, stats: VolumeStats) {
-        self.log_records
-            .fetch_add(stats.log_records, Ordering::Relaxed);
-        self.log_bytes.fetch_add(stats.log_bytes, Ordering::Relaxed);
-        self.metric_data_points
-            .fetch_add(stats.metric_data_points, Ordering::Relaxed);
-        self.metric_bytes
-            .fetch_add(stats.metric_bytes, Ordering::Relaxed);
-        self.spans.fetch_add(stats.spans, Ordering::Relaxed);
-        self.span_bytes
-            .fetch_add(stats.span_bytes, Ordering::Relaxed);
     }
 }
 
@@ -197,21 +182,5 @@ mod tests {
         let reported: i64 = drainers.into_iter().map(|h| h.join().unwrap()).sum();
         let left = tracker.collect().map(|s| s.log_records).unwrap_or_default();
         assert_eq!(reported + left, RECORDS);
-    }
-
-    #[test]
-    fn add_returns_a_failed_syncs_delta() {
-        let t = VolumeTracker::new();
-        t.record_log();
-        t.add_log_bytes(10);
-        let drained = t.collect().unwrap();
-
-        // Arrived while the failing sync was in flight.
-        t.record_log();
-        t.add(drained);
-
-        let stats = t.collect().unwrap();
-        assert_eq!(stats.log_records, 2);
-        assert_eq!(stats.log_bytes, 10);
     }
 }

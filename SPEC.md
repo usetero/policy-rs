@@ -122,8 +122,15 @@ zero", consumers must not read `0` as an observation.
 `volume().collect()` drains the counters and returns the delta since the last
 call, or `None` when nothing was observed — providers omit `volume` from the sync
 request rather than sending zeroes. Overlapping syncs each drain a disjoint
-delta, so no volume is reported twice; a sync that fails hands its delta back via
-`add()`, so the next attempt reports it.
+delta, so no volume is reported twice.
+
+Counters reset **on read**, whether or not the sync carrying them succeeds, which
+is the rule `match_hits`/`match_misses` already follow. A failed sync drops its
+interval from numerator and denominator alike rather than replaying it — the
+server cannot tell a replay from new telemetry. Reported volume is therefore a
+lower bound, not an exact total. Volume not yet read into a request is untouched
+by a failure, so the gRPC provider (which connects before building its request)
+loses nothing when a connection fails.
 
 ---
 

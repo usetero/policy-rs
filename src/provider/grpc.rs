@@ -19,7 +19,7 @@ use crate::policy::Policy;
 use crate::proto::tero::policy::v1::policy_service_client::PolicyServiceClient;
 use crate::proto::tero::policy::v1::{ClientMetadata, SyncRequest};
 
-use super::sync::{collect_policy_statuses, collect_volume, return_volume};
+use super::sync::{collect_policy_statuses, collect_volume};
 use super::{PolicyCallback, PolicyProvider, StatsCollector};
 use crate::volume::VolumeTracker;
 
@@ -186,23 +186,10 @@ impl GrpcProvider {
 
     /// Perform a single sync operation.
     async fn sync(&self, full_sync: bool) -> Result<Vec<Policy>, PolicyError> {
-        let sync_request = self.build_sync_request(full_sync);
-        let drained = sync_request.volume;
-
-        let result = self.send_sync(sync_request).await;
-        if result.is_err() {
-            // Unless the sync succeeds, the volume it drained goes back to the
-            // registry for the next attempt to report.
-            return_volume(&self.volume_tracker.read().unwrap(), drained);
-        }
-        result
-    }
-
-    /// Send an already-built sync request and decode the response.
-    async fn send_sync(&self, sync_request: SyncRequest) -> Result<Vec<Policy>, PolicyError> {
         let channel = self.create_channel().await?;
         let mut client = PolicyServiceClient::new(channel);
 
+        let sync_request = self.build_sync_request(full_sync);
         let request = self.create_request(sync_request);
 
         let response = client
@@ -270,8 +257,6 @@ impl GrpcProvider {
             while running_clone.load(Ordering::SeqCst) {
                 interval_timer.tick().await;
 
-                let drained = collect_volume(&volume_tracker);
-
                 let result = async {
                     // Create channel
                     let endpoint = Endpoint::from_shared(config.url.clone())
@@ -288,6 +273,7 @@ impl GrpcProvider {
                     let last_hash_val = last_hash_clone.read().unwrap().clone().unwrap_or_default();
                     let last_timestamp = *last_sync_timestamp_clone.read().unwrap();
                     let policy_statuses = collect_policy_statuses(&stats_collector);
+                    let volume = collect_volume(&volume_tracker);
 
                     let sync_request = SyncRequest {
                         client_metadata: config.client_metadata.clone(),
@@ -295,7 +281,7 @@ impl GrpcProvider {
                         last_sync_timestamp_unix_nano: last_timestamp,
                         last_successful_hash: last_hash_val,
                         policy_statuses,
-                        volume: drained,
+                        volume,
                     };
 
                     let mut request = Request::new(sync_request);
@@ -344,10 +330,6 @@ impl GrpcProvider {
                     Ok((new_hash, policies))
                 }
                 .await;
-
-                if result.is_err() {
-                    return_volume(&volume_tracker, drained);
-                }
 
                 first = false;
 
@@ -448,17 +430,16 @@ mod tests {
         assert!(provider.build_sync_request(true).volume.is_none());
     }
 
+    /// Counters reset when read into a request, so a failure *before* the
+    /// request is built — this provider connects first — leaves them intact.
+    /// Once drained, a delta is never replayed; that is
+    /// [`super::sync::collect_volume`]'s contract.
     #[tokio::test]
-    async fn failed_sync_returns_drained_volume() {
+    async fn failed_connect_leaves_volume_unread() {
         let (provider, tracker) = unreachable_provider();
         tracker.record_span();
-        tracker.add_span_bytes(11);
 
         assert!(provider.sync(true).await.is_err());
-
-        // Retained, so the next attempt reports it.
-        let volume = tracker.collect().unwrap();
-        assert_eq!(volume.spans, 1);
-        assert_eq!(volume.span_bytes, 11);
+        assert_eq!(tracker.collect().unwrap().spans, 1);
     }
 }
