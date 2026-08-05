@@ -1149,6 +1149,38 @@ pub struct PolicySyncStatus {
     #[prost(message, optional, tag = "13")]
     pub add: ::core::option::Option<TransformStageStatus>,
 }
+/// VolumeStats reports the total telemetry a client observed since the last
+/// sync, regardless of whether any policy matched it. Counts are of records
+/// entering policy evaluation, before any keep or transform stage runs, and are
+/// reset on each successful sync.
+///
+/// Reporting volume is optional, and every field is individually optional: an
+/// implementation may report record counts without byte counts, or a subset of
+/// signals. Any field left at 0 means "not tracked" as much as it means "none
+/// seen", so consumers must not read 0 as an observation.
+///
+/// Byte counts, when reported, are the uncompressed OTLP protobuf serialized
+/// size of the records as received, and are an estimate; implementations that
+/// cannot measure this cheaply may approximate it. A size in any other encoding
+/// must not be reported here — leave the field at 0 instead.
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct VolumeStats {
+    /// Log records seen, and their total size in bytes.
+    #[prost(int64, tag = "1")]
+    pub log_records: i64,
+    #[prost(int64, tag = "2")]
+    pub log_bytes: i64,
+    /// Metric data points seen, and their total size in bytes.
+    #[prost(int64, tag = "3")]
+    pub metric_data_points: i64,
+    #[prost(int64, tag = "4")]
+    pub metric_bytes: i64,
+    /// Spans seen, and their total size in bytes.
+    #[prost(int64, tag = "5")]
+    pub spans: i64,
+    #[prost(int64, tag = "6")]
+    pub span_bytes: i64,
+}
 /// SyncRequest is sent by clients to request policy updates.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncRequest {
@@ -1167,6 +1199,10 @@ pub struct SyncRequest {
     /// Status of individual policies within this set.
     #[prost(message, repeated, tag = "5")]
     pub policy_statuses: ::prost::alloc::vec::Vec<PolicySyncStatus>,
+    /// Optional. Total telemetry observed since the last sync, regardless of
+    /// policy match. Clients that do not track volume omit this.
+    #[prost(message, optional, tag = "6")]
+    pub volume: ::core::option::Option<VolumeStats>,
 }
 /// SyncResponse contains policy updates for the client.
 #[derive(Clone, PartialEq, ::prost::Message)]

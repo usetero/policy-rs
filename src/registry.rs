@@ -12,6 +12,7 @@ use crate::engine::CompiledMatchers;
 use crate::engine::signal::{LogSignal, MetricSignal, TraceSignal};
 use crate::error::PolicyError;
 use crate::provider::{PolicyProvider, StatsCollector};
+use crate::volume::VolumeTracker;
 
 /// Unique identifier for a registered provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -164,11 +165,13 @@ struct SnapshotInner {
     compiled_traces: Option<CompiledMatchers<TraceSignal>>,
     /// Per-policy compilation errors collected across all signal batches.
     compilation_errors: HashMap<String, Vec<String>>,
+    /// The registry's volume tracker, so evaluation can count what it sees.
+    volume: Arc<VolumeTracker>,
 }
 
 impl PolicySnapshot {
-    /// Create an empty snapshot.
-    fn empty() -> Self {
+    /// Create an empty snapshot that still counts volume into `volume`.
+    fn empty(volume: Arc<VolumeTracker>) -> Self {
         Self {
             inner: Arc::new(SnapshotInner {
                 policies: Vec::new(),
@@ -177,8 +180,14 @@ impl PolicySnapshot {
                 compiled_metrics: None,
                 compiled_traces: None,
                 compilation_errors: HashMap::new(),
+                volume,
             }),
         }
+    }
+
+    /// The volume tracker records evaluated against this snapshot report to.
+    pub(crate) fn volume(&self) -> &VolumeTracker {
+        &self.inner.volume
     }
 
     /// Return the compilation errors for a policy, or an empty slice if none.
@@ -271,14 +280,18 @@ struct RegistryInner {
     providers: RwLock<ProviderPolicies>,
     /// The current snapshot, atomically swapped on updates.
     snapshot: RwLock<PolicySnapshot>,
+    /// Total observed telemetry volume, shared with every snapshot.
+    volume: Arc<VolumeTracker>,
 }
 
 impl RegistryInner {
     fn new() -> Self {
+        let volume = Arc::new(VolumeTracker::new());
         Self {
             next_provider_id: AtomicU64::new(0),
             providers: RwLock::new(HashMap::new()),
-            snapshot: RwLock::new(PolicySnapshot::empty()),
+            snapshot: RwLock::new(PolicySnapshot::empty(Arc::clone(&volume))),
+            volume,
         }
     }
 
@@ -411,6 +424,7 @@ impl RegistryInner {
                 compiled_metrics,
                 compiled_traces,
                 compilation_errors,
+                volume: Arc::clone(&self.volume),
             }),
         };
 
@@ -456,6 +470,16 @@ impl PolicyRegistry {
         }
     }
 
+    /// The tracker for total observed telemetry volume.
+    ///
+    /// Record counts are automatic: the engine counts every record it evaluates
+    /// against a snapshot from this registry, and subscribed providers report the
+    /// counters via `SyncRequest.volume`. Use this to add the optional byte
+    /// counts the engine cannot measure, or to read the counters directly.
+    pub fn volume(&self) -> &Arc<VolumeTracker> {
+        &self.inner.volume
+    }
+
     /// Subscribe to a policy provider.
     ///
     /// The registry will receive policy updates from this provider automatically.
@@ -482,6 +506,9 @@ impl PolicyRegistry {
                 .collect()
         });
         provider.set_stats_collector(collector);
+
+        // Wire up volume reporting so providers can report total observed volume
+        provider.set_volume_tracker(Arc::clone(&self.inner.volume));
 
         // Create a callback that updates the registry
         let callback = {
@@ -831,6 +858,47 @@ mod tests {
         let p1_again = stats_again.iter().find(|(id, _)| id == "policy-1").unwrap();
         assert_eq!(p1_again.1.match_hits, 0);
         assert_eq!(p1_again.1.match_misses, 0);
+    }
+
+    #[test]
+    fn subscribe_auto_wires_volume_tracker() {
+        use crate::provider::{PolicyCallback, PolicyProvider};
+        use std::sync::RwLock;
+
+        /// A test provider that captures the volume tracker set by the registry.
+        struct SpyProvider {
+            tracker: RwLock<Option<Arc<VolumeTracker>>>,
+        }
+
+        impl PolicyProvider for SpyProvider {
+            fn set_volume_tracker(&self, tracker: Arc<VolumeTracker>) {
+                *self.tracker.write().unwrap() = Some(tracker);
+            }
+
+            fn subscribe(&self, callback: PolicyCallback) -> Result<(), PolicyError> {
+                callback(Vec::new());
+                Ok(())
+            }
+        }
+
+        let provider = SpyProvider {
+            tracker: RwLock::new(None),
+        };
+
+        let registry = PolicyRegistry::new();
+        registry.subscribe(&provider).unwrap();
+
+        let tracker = provider.tracker.read().unwrap();
+        let tracker = tracker
+            .as_ref()
+            .expect("volume tracker should be auto-wired");
+
+        // Nothing observed yet, so there is nothing to report.
+        assert!(tracker.collect().is_none());
+
+        // What the registry counts reaches the provider's tracker.
+        registry.volume().add_log_bytes(300);
+        assert_eq!(tracker.collect().unwrap().log_bytes, 300);
     }
 
     fn make_log_policy_with_invalid_regex(id: &str) -> Policy {

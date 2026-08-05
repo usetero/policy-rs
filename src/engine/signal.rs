@@ -9,6 +9,7 @@ use std::hash::Hash;
 
 use crate::field::{LogFieldSelector, MetricFieldSelector, TraceFieldSelector};
 use crate::registry::PolicySnapshot;
+use crate::volume::VolumeTracker;
 
 use super::compiled::CompiledMatchers;
 
@@ -24,6 +25,9 @@ pub trait Signal: 'static {
     fn compiled_matchers(snapshot: &PolicySnapshot) -> Option<&CompiledMatchers<Self>>
     where
         Self: Sized;
+
+    /// Count one record of this signal entering evaluation.
+    fn record_volume(volume: &VolumeTracker);
 
     /// Construct the rename target selector for moving `from` to `to_key`.
     ///
@@ -50,6 +54,10 @@ impl Signal for LogSignal {
         snapshot.compiled_log_matchers()
     }
 
+    fn record_volume(volume: &VolumeTracker) {
+        volume.record_log();
+    }
+
     fn rename_target(from: &Self::FieldSelector, to_key: &str) -> Option<Self::FieldSelector> {
         let path = vec![to_key.to_string()];
         match from {
@@ -72,6 +80,10 @@ impl Signal for MetricSignal {
 
     fn compiled_matchers(snapshot: &PolicySnapshot) -> Option<&CompiledMatchers<Self>> {
         snapshot.compiled_metric_matchers()
+    }
+
+    fn record_volume(volume: &VolumeTracker) {
+        volume.record_metric();
     }
 
     fn rename_target(from: &Self::FieldSelector, to_key: &str) -> Option<Self::FieldSelector> {
@@ -103,6 +115,10 @@ impl Signal for TraceSignal {
 
     fn compiled_matchers(snapshot: &PolicySnapshot) -> Option<&CompiledMatchers<Self>> {
         snapshot.compiled_trace_matchers()
+    }
+
+    fn record_volume(volume: &VolumeTracker) {
+        volume.record_span();
     }
 
     fn rename_target(from: &Self::FieldSelector, to_key: &str) -> Option<Self::FieldSelector> {

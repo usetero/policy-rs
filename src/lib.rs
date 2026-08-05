@@ -46,6 +46,7 @@ mod policy;
 pub mod proto;
 pub mod provider;
 pub mod registry;
+pub mod volume;
 
 pub use config::{ProviderConfig, register_providers};
 pub use engine::{
@@ -68,6 +69,7 @@ pub use registry::{
     ProviderId, TransformStageStats,
 };
 pub use std::borrow::Cow;
+pub use volume::VolumeTracker;
 
 #[cfg(test)]
 mod tests {
