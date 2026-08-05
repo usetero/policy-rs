@@ -119,6 +119,10 @@ impl PolicyEngine {
         snapshot: &PolicySnapshot,
         log: &T,
     ) -> Result<EvaluateResult, PolicyError> {
+        // Volume is counted before the early returns: every record entering
+        // evaluation counts, including ones with no policies loaded.
+        T::Signal::record_volume(snapshot.volume());
+
         let Some(compiled) = T::Signal::compiled_matchers(snapshot) else {
             return Ok(EvaluateResult::NoMatch);
         };
@@ -163,6 +167,10 @@ impl PolicyEngine {
         snapshot: &PolicySnapshot,
         log: &mut T,
     ) -> Result<EvaluateResult, PolicyError> {
+        // Volume is counted before the early returns: every record entering
+        // evaluation counts, including ones with no policies loaded.
+        T::Signal::record_volume(snapshot.volume());
+
         let Some(compiled) = T::Signal::compiled_matchers(snapshot) else {
             return Ok(EvaluateResult::NoMatch);
         };
@@ -292,6 +300,8 @@ impl PolicyEngine {
         snapshot: &PolicySnapshot,
         span: &mut T,
     ) -> Result<EvaluateResult, PolicyError> {
+        TraceSignal::record_volume(snapshot.volume());
+
         let Some(compiled) = TraceSignal::compiled_matchers(snapshot) else {
             return Ok(EvaluateResult::NoMatch);
         };
@@ -949,6 +959,131 @@ mod tests {
 
         let result = engine.evaluate(&snapshot, &log).unwrap();
         assert_eq!(result, EvaluateResult::NoMatch);
+    }
+
+    /// Volume is counted for every record entering evaluation, including when no
+    /// policies are loaded at all.
+    #[test]
+    fn evaluate_counts_volume_with_no_policies() {
+        let registry = PolicyRegistry::new();
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        engine
+            .evaluate(&snapshot, &TestLog::new().with_body("hi"))
+            .unwrap();
+        engine
+            .evaluate_and_transform(&snapshot, &mut TestLog::new().with_body("there"))
+            .unwrap();
+        engine
+            .evaluate(&snapshot, &TestMetric::new().with_name("m"))
+            .unwrap();
+        engine
+            .evaluate_trace(&snapshot, &mut TestSpan::new().with_name("s"))
+            .unwrap();
+
+        let volume = registry.volume().collect().unwrap();
+        assert_eq!(volume.log_records, 2);
+        assert_eq!(volume.metric_data_points, 1);
+        assert_eq!(volume.spans, 1);
+        assert_eq!(volume.log_bytes, 0, "bytes are opt-in");
+
+        // Collecting drains: the next collect is the delta since this one.
+        assert!(registry.volume().collect().is_none());
+    }
+
+    /// Counting happens before the keep stage, so records a policy drops,
+    /// samples out, or rate-limits away are still counted — exactly once.
+    #[test]
+    fn evaluate_counts_dropped_and_sampled_records() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+        handle.update(vec![
+            make_policy(
+                "drop-logs",
+                vec![body_regex_matcher("drop-me", false)],
+                "none",
+                true,
+            ),
+            make_policy(
+                "limit-logs",
+                vec![body_regex_matcher("limit-me", false)],
+                "0/s",
+                true,
+            ),
+            make_metric_policy(
+                "drop-metrics",
+                vec![metric_name_regex_matcher("drop-me", false)],
+                false,
+                true,
+            ),
+            make_trace_policy(
+                "drop-spans",
+                vec![trace_name_regex_matcher("drop-me", false)],
+                Some(TraceSamplingConfig {
+                    percentage: 0.0,
+                    ..Default::default()
+                }),
+                true,
+            ),
+        ]);
+
+        let snapshot = registry.snapshot();
+        let engine = PolicyEngine::new();
+
+        let dropped = engine
+            .evaluate(&snapshot, &TestLog::new().with_body("drop-me"))
+            .unwrap();
+        assert!(matches!(dropped, EvaluateResult::Drop { .. }));
+        let limited = engine
+            .evaluate_and_transform(&snapshot, &mut TestLog::new().with_body("limit-me"))
+            .unwrap();
+        assert!(matches!(
+            limited,
+            EvaluateResult::RateLimit { allowed: false, .. }
+        ));
+        engine
+            .evaluate(&snapshot, &TestMetric::new().with_name("drop-me"))
+            .unwrap();
+        engine
+            .evaluate_trace(&snapshot, &mut TestSpan::new().with_name("drop-me"))
+            .unwrap();
+
+        let volume = registry.volume().collect().unwrap();
+        assert_eq!(volume.log_records, 2);
+        assert_eq!(volume.metric_data_points, 1);
+        assert_eq!(volume.spans, 1);
+    }
+
+    /// A policy update rebuilds the snapshot; counts must keep landing on the
+    /// registry's tracker, including counts made against a stale snapshot.
+    #[test]
+    fn volume_survives_snapshot_rebuilds() {
+        let registry = PolicyRegistry::new();
+        let handle = registry.register_provider();
+        let engine = PolicyEngine::new();
+
+        let stale = registry.snapshot();
+        engine
+            .evaluate(&stale, &TestLog::new().with_body("before"))
+            .unwrap();
+
+        handle.update(vec![make_policy(
+            "keep-all",
+            vec![body_regex_matcher("after", false)],
+            "all",
+            true,
+        )]);
+
+        engine
+            .evaluate(&registry.snapshot(), &TestLog::new().with_body("after"))
+            .unwrap();
+        // Still counted, even though this snapshot has been superseded.
+        engine
+            .evaluate(&stale, &TestLog::new().with_body("after"))
+            .unwrap();
+
+        assert_eq!(registry.volume().collect().unwrap().log_records, 3);
     }
 
     #[test]

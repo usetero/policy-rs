@@ -1,7 +1,10 @@
 //! Shared sync utilities for HTTP and gRPC providers.
 
-use crate::proto::tero::policy::v1::{PolicySyncStatus, TransformStageStatus};
+use std::sync::Arc;
+
+use crate::proto::tero::policy::v1::{PolicySyncStatus, TransformStageStatus, VolumeStats};
 use crate::registry::PolicyStatsSnapshot;
+use crate::volume::VolumeTracker;
 
 use super::StatsCollector;
 
@@ -29,6 +32,13 @@ pub fn stats_to_sync_status(id: String, stats: PolicyStatsSnapshot) -> PolicySyn
             misses: stats.add.1 as i64,
         }),
     }
+}
+
+/// Drain observed volume into a sync request, or `None` if there is nothing to
+/// report. Counters reset on read, whether or not the sync then succeeds, so a
+/// delta is reported at most once and never replayed.
+pub fn collect_volume(tracker: &Option<Arc<VolumeTracker>>) -> Option<VolumeStats> {
+    tracker.as_ref().and_then(|t| t.collect())
 }
 
 /// Collect policy statuses from a stats collector.

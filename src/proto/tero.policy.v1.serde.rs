@@ -3345,6 +3345,9 @@ impl serde::Serialize for SyncRequest {
         if !self.policy_statuses.is_empty() {
             len += 1;
         }
+        if self.volume.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("tero.policy.v1.SyncRequest", len)?;
         if let Some(v) = self.client_metadata.as_ref() {
             struct_ser.serialize_field("clientMetadata", v)?;
@@ -3362,6 +3365,9 @@ impl serde::Serialize for SyncRequest {
         }
         if !self.policy_statuses.is_empty() {
             struct_ser.serialize_field("policyStatuses", &self.policy_statuses)?;
+        }
+        if let Some(v) = self.volume.as_ref() {
+            struct_ser.serialize_field("volume", v)?;
         }
         struct_ser.end()
     }
@@ -3383,6 +3389,7 @@ impl<'de> serde::Deserialize<'de> for SyncRequest {
             "lastSuccessfulHash",
             "policy_statuses",
             "policyStatuses",
+            "volume",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -3392,6 +3399,7 @@ impl<'de> serde::Deserialize<'de> for SyncRequest {
             LastSyncTimestampUnixNano,
             LastSuccessfulHash,
             PolicyStatuses,
+            Volume,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -3418,6 +3426,7 @@ impl<'de> serde::Deserialize<'de> for SyncRequest {
                             "lastSyncTimestampUnixNano" | "last_sync_timestamp_unix_nano" => Ok(GeneratedField::LastSyncTimestampUnixNano),
                             "lastSuccessfulHash" | "last_successful_hash" => Ok(GeneratedField::LastSuccessfulHash),
                             "policyStatuses" | "policy_statuses" => Ok(GeneratedField::PolicyStatuses),
+                            "volume" => Ok(GeneratedField::Volume),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -3442,6 +3451,7 @@ impl<'de> serde::Deserialize<'de> for SyncRequest {
                 let mut last_sync_timestamp_unix_nano__ = None;
                 let mut last_successful_hash__ = None;
                 let mut policy_statuses__ = None;
+                let mut volume__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ClientMetadata => {
@@ -3476,6 +3486,12 @@ impl<'de> serde::Deserialize<'de> for SyncRequest {
                             }
                             policy_statuses__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Volume => {
+                            if volume__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("volume"));
+                            }
+                            volume__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(SyncRequest {
@@ -3484,6 +3500,7 @@ impl<'de> serde::Deserialize<'de> for SyncRequest {
                     last_sync_timestamp_unix_nano: last_sync_timestamp_unix_nano__.unwrap_or_default(),
                     last_successful_hash: last_successful_hash__.unwrap_or_default(),
                     policy_statuses: policy_statuses__.unwrap_or_default(),
+                    volume: volume__,
                 })
             }
         }
@@ -4781,5 +4798,210 @@ impl<'de> serde::Deserialize<'de> for Value {
             }
         }
         deserializer.deserialize_struct("tero.policy.v1.Value", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for VolumeStats {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.log_records != 0 {
+            len += 1;
+        }
+        if self.log_bytes != 0 {
+            len += 1;
+        }
+        if self.metric_data_points != 0 {
+            len += 1;
+        }
+        if self.metric_bytes != 0 {
+            len += 1;
+        }
+        if self.spans != 0 {
+            len += 1;
+        }
+        if self.span_bytes != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("tero.policy.v1.VolumeStats", len)?;
+        if self.log_records != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("logRecords", ToString::to_string(&self.log_records).as_str())?;
+        }
+        if self.log_bytes != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("logBytes", ToString::to_string(&self.log_bytes).as_str())?;
+        }
+        if self.metric_data_points != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("metricDataPoints", ToString::to_string(&self.metric_data_points).as_str())?;
+        }
+        if self.metric_bytes != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("metricBytes", ToString::to_string(&self.metric_bytes).as_str())?;
+        }
+        if self.spans != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("spans", ToString::to_string(&self.spans).as_str())?;
+        }
+        if self.span_bytes != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("spanBytes", ToString::to_string(&self.span_bytes).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for VolumeStats {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "log_records",
+            "logRecords",
+            "log_bytes",
+            "logBytes",
+            "metric_data_points",
+            "metricDataPoints",
+            "metric_bytes",
+            "metricBytes",
+            "spans",
+            "span_bytes",
+            "spanBytes",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            LogRecords,
+            LogBytes,
+            MetricDataPoints,
+            MetricBytes,
+            Spans,
+            SpanBytes,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "logRecords" | "log_records" => Ok(GeneratedField::LogRecords),
+                            "logBytes" | "log_bytes" => Ok(GeneratedField::LogBytes),
+                            "metricDataPoints" | "metric_data_points" => Ok(GeneratedField::MetricDataPoints),
+                            "metricBytes" | "metric_bytes" => Ok(GeneratedField::MetricBytes),
+                            "spans" => Ok(GeneratedField::Spans),
+                            "spanBytes" | "span_bytes" => Ok(GeneratedField::SpanBytes),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = VolumeStats;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct tero.policy.v1.VolumeStats")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<VolumeStats, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut log_records__ = None;
+                let mut log_bytes__ = None;
+                let mut metric_data_points__ = None;
+                let mut metric_bytes__ = None;
+                let mut spans__ = None;
+                let mut span_bytes__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::LogRecords => {
+                            if log_records__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("logRecords"));
+                            }
+                            log_records__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::LogBytes => {
+                            if log_bytes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("logBytes"));
+                            }
+                            log_bytes__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::MetricDataPoints => {
+                            if metric_data_points__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("metricDataPoints"));
+                            }
+                            metric_data_points__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::MetricBytes => {
+                            if metric_bytes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("metricBytes"));
+                            }
+                            metric_bytes__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Spans => {
+                            if spans__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("spans"));
+                            }
+                            spans__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::SpanBytes => {
+                            if span_bytes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("spanBytes"));
+                            }
+                            span_bytes__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(VolumeStats {
+                    log_records: log_records__.unwrap_or_default(),
+                    log_bytes: log_bytes__.unwrap_or_default(),
+                    metric_data_points: metric_data_points__.unwrap_or_default(),
+                    metric_bytes: metric_bytes__.unwrap_or_default(),
+                    spans: spans__.unwrap_or_default(),
+                    span_bytes: span_bytes__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("tero.policy.v1.VolumeStats", FIELDS, GeneratedVisitor)
     }
 }

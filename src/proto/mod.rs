@@ -830,6 +830,11 @@ mod tests {
                 match_misses: 50,
                 ..Default::default()
             }],
+            volume: Some(VolumeStats {
+                log_records: 1000,
+                log_bytes: 2048,
+                ..Default::default()
+            }),
         };
 
         let json = serde_json::to_value(&request).unwrap();
@@ -855,9 +860,21 @@ mod tests {
         assert_eq!(status["matchHits"], "100");
         assert_eq!(status["matchMisses"], "50");
 
+        // Volume stats: camelCase names, i64 as strings, untracked fields omitted
+        let volume = &json["volume"];
+        assert_eq!(volume["logRecords"], "1000");
+        assert_eq!(volume["logBytes"], "2048");
+        assert!(volume.get("log_records").is_none());
+        assert!(volume.get("spans").is_none());
+
         // Verify round-trip: a Go server would deserialize our JSON and send it back
         let roundtripped: SyncRequest = serde_json::from_value(json).unwrap();
         assert_eq!(roundtripped, request);
+
+        // Same for the protobuf encoding the providers use by default.
+        use prost::Message;
+        let decoded = SyncRequest::decode(request.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(decoded, request);
     }
 
     #[test]

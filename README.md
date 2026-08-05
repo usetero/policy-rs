@@ -320,6 +320,23 @@ for entry in snapshot.iter() {
 }
 ```
 
+### Volume Tracking
+
+Policy statistics only count records a policy matched. Total observed volume —
+the denominator — is counted separately, for every record entering evaluation,
+before any keep or transform stage. Record counts are automatic; byte counts are
+opt-in and must be the uncompressed OTLP protobuf size as received:
+
+```rust
+registry.volume().add_log_bytes(logs.encoded_len() as i64); // optional
+engine.evaluate(&registry.snapshot(), &record)?;            // counts the record
+```
+
+The HTTP and gRPC providers report volume in their sync requests automatically,
+resetting the counters as they are read into a request — a failed sync drops its
+interval rather than replaying it, so reported volume is a lower bound. To read
+it directly, use `registry.volume().collect()`.
+
 ### Multiple Providers
 
 Combine policies from multiple sources:

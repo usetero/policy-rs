@@ -16,8 +16,9 @@ use crate::error::PolicyError;
 use crate::policy::Policy;
 use crate::proto::tero::policy::v1::{ClientMetadata, SyncRequest, SyncResponse};
 
-use super::sync::collect_policy_statuses;
+use super::sync::{collect_policy_statuses, collect_volume};
 use super::{PolicyCallback, PolicyProvider, StatsCollector};
+use crate::volume::VolumeTracker;
 
 /// Configuration for the HTTP provider.
 #[derive(Debug, Clone)]
@@ -108,6 +109,8 @@ pub struct HttpProvider {
     running: AtomicBool,
     /// Stats collector for reporting policy statistics.
     stats_collector: RwLock<Option<StatsCollector>>,
+    /// Tracker for reporting total observed telemetry volume.
+    volume_tracker: RwLock<Option<Arc<VolumeTracker>>>,
     /// Cached policies from initial async fetch (used to avoid blocking in subscribe).
     initial_policies: RwLock<Option<Vec<Policy>>>,
 }
@@ -127,6 +130,7 @@ impl HttpProvider {
             last_sync_timestamp: RwLock::new(0),
             running: AtomicBool::new(false),
             stats_collector: RwLock::new(None),
+            volume_tracker: RwLock::new(None),
             initial_policies: RwLock::new(None),
         }
     }
@@ -160,6 +164,7 @@ impl HttpProvider {
         let last_hash = self.last_hash.read().unwrap().clone().unwrap_or_default();
         let last_timestamp = *self.last_sync_timestamp.read().unwrap();
         let policy_statuses = collect_policy_statuses(&self.stats_collector.read().unwrap());
+        let volume = collect_volume(&self.volume_tracker.read().unwrap());
 
         SyncRequest {
             client_metadata: self.config.client_metadata.clone(),
@@ -167,6 +172,7 @@ impl HttpProvider {
             last_sync_timestamp_unix_nano: last_timestamp,
             last_successful_hash: last_hash,
             policy_statuses,
+            volume,
         }
     }
 
@@ -285,6 +291,7 @@ impl HttpProvider {
         let last_hash = Arc::new(RwLock::new(None::<String>));
         let last_sync_timestamp = Arc::new(RwLock::new(0u64));
         let stats_collector = self.stats_collector.read().unwrap().clone();
+        let volume_tracker = self.volume_tracker.read().unwrap().clone();
         let running = Arc::new(AtomicBool::new(true));
 
         let running_clone = running.clone();
@@ -305,6 +312,7 @@ impl HttpProvider {
                     let last_hash = last_hash_clone.read().unwrap().clone().unwrap_or_default();
                     let last_timestamp = *last_sync_timestamp_clone.read().unwrap();
                     let policy_statuses = collect_policy_statuses(&stats_collector);
+                    let volume = collect_volume(&volume_tracker);
 
                     SyncRequest {
                         client_metadata: config.client_metadata.clone(),
@@ -312,6 +320,7 @@ impl HttpProvider {
                         last_sync_timestamp_unix_nano: last_timestamp,
                         last_successful_hash: last_hash,
                         policy_statuses,
+                        volume,
                     }
                 };
 
@@ -420,6 +429,10 @@ impl PolicyProvider for HttpProvider {
         *self.stats_collector.write().unwrap() = Some(collector);
     }
 
+    fn set_volume_tracker(&self, tracker: Arc<VolumeTracker>) {
+        *self.volume_tracker.write().unwrap() = Some(tracker);
+    }
+
     fn subscribe(&self, callback: PolicyCallback) -> Result<(), PolicyError> {
         // Use cached policies from new_with_initial_fetch()
         let policies = self
@@ -458,5 +471,51 @@ impl PolicyProvider for HttpProvider {
         });
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A provider pointed at a port nothing listens on, so every sync fails.
+    fn unreachable_provider() -> (HttpProvider, Arc<VolumeTracker>) {
+        let provider = HttpProvider::new(HttpProviderConfig::new("http://127.0.0.1:1"));
+        let tracker = Arc::new(VolumeTracker::new());
+        provider.set_volume_tracker(Arc::clone(&tracker));
+        (provider, tracker)
+    }
+
+    #[test]
+    fn sync_request_omits_untracked_volume() {
+        let (provider, _tracker) = unreachable_provider();
+        assert!(provider.build_sync_request(true).volume.is_none());
+    }
+
+    #[test]
+    fn sync_request_drains_observed_volume() {
+        let (provider, tracker) = unreachable_provider();
+        tracker.record_log();
+        tracker.add_log_bytes(400);
+
+        let volume = provider.build_sync_request(true).volume.unwrap();
+        assert_eq!(volume.log_records, 1);
+        assert_eq!(volume.log_bytes, 400);
+
+        // The delta is drained, so a second request would not report it again.
+        assert!(provider.build_sync_request(true).volume.is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_sync_does_not_replay_volume() {
+        let (provider, tracker) = unreachable_provider();
+        tracker.record_log();
+        tracker.add_log_bytes(400);
+
+        assert!(provider.sync(true).await.is_err());
+
+        // The delta went out with the failed request and is not replayed: the
+        // server cannot tell a replay from new telemetry.
+        assert!(tracker.collect().is_none());
     }
 }

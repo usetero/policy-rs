@@ -18,6 +18,7 @@ use std::sync::Arc;
 use crate::error::PolicyError;
 use crate::policy::Policy;
 use crate::registry::PolicyStatsSnapshot;
+use crate::volume::VolumeTracker;
 
 /// Callback type for policy updates.
 pub type PolicyCallback = Arc<dyn Fn(Vec<Policy>) + Send + Sync>;
@@ -45,4 +46,10 @@ pub trait PolicyProvider: Send + Sync {
     /// Called automatically by [`PolicyRegistry::subscribe()`]. Providers that
     /// report stats (HTTP, gRPC) should override this; the default is a no-op.
     fn set_stats_collector(&self, _collector: StatsCollector) {}
+
+    /// Set the tracker for reporting total observed telemetry volume.
+    ///
+    /// Called automatically by [`PolicyRegistry::subscribe()`]. Providers that
+    /// report volume (HTTP, gRPC) should override this; the default is a no-op.
+    fn set_volume_tracker(&self, _tracker: Arc<VolumeTracker>) {}
 }
