@@ -20,7 +20,7 @@ http = ["reqwest"]
 grpc = ["tonic"]
 
 [dependencies]
-vectorscan-rs-sys = "0.0.5"
+vectorscan-rs-sys = "0.0.6"
 prost = "0.13"
 fnv = "1"
 rand = "0.8"
