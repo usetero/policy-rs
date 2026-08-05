@@ -20,7 +20,7 @@ http = ["reqwest"]
 grpc = ["tonic"]
 
 [dependencies]
-vectorscan-rs-sys = "0.0.5"
+vectorscan-rs-sys = "0.0.6"
 prost = "0.13"
 fnv = "1"
 rand = "0.8"
@@ -29,15 +29,15 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], optional = true
 notify = "7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-pbjson = "0.7"
+pbjson = "0.9"
 tokio = { version = "1", features = ["rt", "sync", "time"] }
 tonic = { version = "0.12", optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.8", features = ["async_tokio"] }
-dotenvy = "0.15"
-tempfile = "3"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+criterion = { version = "=0.8.2", features = ["async_tokio"] }
+dotenvy = "=0.15.7"
+tempfile = "=3.27.0"
+tokio = { version = "=1.53.1", features = ["rt", "rt-multi-thread", "macros"] }
 
 [[bench]]
 name = "engine"
@@ -52,6 +52,6 @@ name = "grpc_provider"
 required-features = ["grpc"]
 
 [build-dependencies]
-pbjson-build = "0.7"
+pbjson-build = "0.9"
 prost-build = "0.13"
 tonic-build = "0.12"
