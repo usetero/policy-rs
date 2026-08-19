@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.1](https://github.com/usetero/policy-rs/compare/v1.8.0...v1.8.1) (2026-08-19)
+
+
+### Bug Fixes
+
+* let the consumer choose the TLS root source ([#104](https://github.com/usetero/policy-rs/issues/104)) ([ca380ab](https://github.com/usetero/policy-rs/commit/ca380abb13952b13b1e6b051b1a7d3d496ae31ef))
+
 ## [1.8.0](https://github.com/usetero/policy-rs/compare/v1.7.1...v1.8.0) (2026-08-05)
 
 
