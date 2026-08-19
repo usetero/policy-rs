@@ -3,15 +3,15 @@
 mod file;
 #[cfg(feature = "grpc")]
 mod grpc;
-#[cfg(feature = "http")]
+#[cfg(feature = "reqwest")]
 mod http;
-#[cfg(any(feature = "http", feature = "grpc"))]
+#[cfg(any(feature = "reqwest", feature = "grpc"))]
 mod sync;
 
 pub use file::FileProvider;
 #[cfg(feature = "grpc")]
 pub use grpc::{GrpcProvider, GrpcProviderConfig};
-#[cfg(feature = "http")]
+#[cfg(feature = "reqwest")]
 pub use http::{ContentType, HttpProvider, HttpProviderConfig};
 use std::sync::Arc;
 

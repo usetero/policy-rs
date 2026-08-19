@@ -29,6 +29,25 @@ Add to your `Cargo.toml`:
 policy-rs = { git = "https://github.com/usetero/policy-rs" }
 ```
 
+### Cargo features
+
+| Feature | Enables |
+| --- | --- |
+| `http` | `HttpProvider`, with webpki TLS roots and the ring crypto provider. |
+| `http-no-roots` | `HttpProvider` with no TLS roots and no crypto provider — **the consumer supplies both**. |
+| `webpki-roots` | webpki TLS roots plus the ring provider. |
+| `native-roots` | Platform TLS roots plus the ring provider. |
+| `grpc` | `GrpcProvider`. |
+
+`http` is `http-no-roots` + `webpki-roots`, so it needs no extra wiring. Use
+`http-no-roots` when your binary must control the root source or the crypto
+provider — a FIPS build, for example. Cargo unifies features additively, so a
+crate that forces a root source makes it impossible for its consumers to
+subtract one; this crate therefore forces none. Note that `http-no-roots` alone
+leaves reqwest with no crypto provider, and constructing an `HttpProvider` then
+panics with `No provider set`, so pair it with a root feature or install a
+process-default provider.
+
 ## Quick Start
 
 ```rust

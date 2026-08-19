@@ -124,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             provider.id(),
             match provider {
                 ProviderConfig::File(_) => "file",
-                #[cfg(feature = "http")]
+                #[cfg(feature = "reqwest")]
                 ProviderConfig::Http(_) => "http",
                 #[cfg(feature = "grpc")]
                 ProviderConfig::Grpc(_) => "grpc",
