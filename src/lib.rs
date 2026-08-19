@@ -59,7 +59,7 @@ pub use field::{LogFieldSelector, MetricFieldSelector, TraceFieldSelector};
 pub use policy::Policy;
 pub use proto::opentelemetry::proto::common::v1 as otel_common;
 pub use provider::StatsCollector;
-#[cfg(feature = "http")]
+#[cfg(feature = "reqwest")]
 pub use provider::{ContentType, HttpProvider, HttpProviderConfig};
 pub use provider::{FileProvider, PolicyCallback, PolicyProvider};
 #[cfg(feature = "grpc")]

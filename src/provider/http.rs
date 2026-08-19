@@ -119,6 +119,13 @@ impl HttpProvider {
     /// Create a new HTTP provider with the given configuration.
     ///
     /// This is synchronous and does not perform an initial fetch.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no rustls crypto provider is available, which is the case under
+    /// the `http-no-roots` feature until the consumer supplies one (a root
+    /// feature such as `webpki-roots`, or a process-default provider it installs
+    /// itself). The `http` feature includes both.
     /// Use [`HttpProvider::new_with_initial_fetch`] if you need to fetch
     /// policies during construction.
     pub fn new(config: HttpProviderConfig) -> Self {
@@ -474,7 +481,9 @@ impl PolicyProvider for HttpProvider {
     }
 }
 
-#[cfg(test)]
+// `reqwest::Client::new()` panics with "No provider set" unless a crypto
+// provider is compiled in, and `http-no-roots` deliberately omits one.
+#[cfg(all(test, any(feature = "webpki-roots", feature = "native-roots")))]
 mod tests {
     use super::*;
 

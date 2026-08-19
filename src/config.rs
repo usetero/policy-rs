@@ -29,7 +29,7 @@
 //! register_providers(&app_config.policy_providers, &registry).unwrap();
 //! ```
 
-#[cfg(any(feature = "http", feature = "grpc"))]
+#[cfg(any(feature = "reqwest", feature = "grpc"))]
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -58,7 +58,7 @@ pub enum ProviderConfig {
     File(FileProviderConfig),
 
     /// HTTP-based policy provider configuration.
-    #[cfg(feature = "http")]
+    #[cfg(feature = "reqwest")]
     Http(HttpProviderConfig),
 
     /// gRPC-based policy provider configuration.
@@ -81,7 +81,7 @@ pub struct FileProviderConfig {
 }
 
 /// Configuration for an HTTP-based policy provider.
-#[cfg(feature = "http")]
+#[cfg(feature = "reqwest")]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HttpProviderConfig {
     /// Unique identifier for this provider.
@@ -145,7 +145,7 @@ impl ProviderConfig {
     pub fn id(&self) -> &str {
         match self {
             ProviderConfig::File(c) => &c.id,
-            #[cfg(feature = "http")]
+            #[cfg(feature = "reqwest")]
             ProviderConfig::Http(c) => &c.id,
             #[cfg(feature = "grpc")]
             ProviderConfig::Grpc(c) => &c.id,
@@ -172,7 +172,7 @@ impl ProviderConfig {
                 }
                 registry.subscribe(&provider)
             }
-            #[cfg(feature = "http")]
+            #[cfg(feature = "reqwest")]
             ProviderConfig::Http(config) => {
                 use crate::provider::{
                     ContentType, HttpProvider, HttpProviderConfig as HttpConfig,
@@ -231,7 +231,7 @@ impl ProviderConfig {
     }
 }
 
-#[cfg(any(feature = "http", feature = "grpc"))]
+#[cfg(any(feature = "reqwest", feature = "grpc"))]
 /// Convert flat string maps to a [`ClientMetadata`] proto message.
 ///
 /// `resource_attributes` and `labels` are converted to `Vec<KeyValue>` using
@@ -341,7 +341,7 @@ mod tests {
         assert_eq!(configs[1].id(), "backup");
     }
 
-    #[cfg(feature = "http")]
+    #[cfg(feature = "reqwest")]
     #[test]
     fn parse_http_provider_config() {
         let json = r#"{
@@ -372,7 +372,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "http")]
+    #[cfg(feature = "reqwest")]
     #[test]
     fn parse_http_provider_config_with_resource_attributes_and_labels() {
         let json = r#"{
@@ -418,7 +418,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "http")]
+    #[cfg(feature = "reqwest")]
     #[test]
     fn parse_http_provider_config_minimal() {
         let json = r#"{"id": "remote", "type": "http", "url": "https://api.example.com/policies"}"#;

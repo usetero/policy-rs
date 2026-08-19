@@ -16,7 +16,15 @@ doctest = false
 
 [features]
 default = []
-http = ["reqwest"]
+# TLS root sources are chosen by the consumer, not forced here: reqwest's
+# `rustls-tls` implies webpki roots, which a FIPS build cannot subtract because
+# Cargo unifies features additively. `http` keeps the standalone default; a
+# consumer that supplies its own roots (and crypto provider) takes
+# `http-no-roots` and adds one of the root features, or reqwest's own.
+http = ["http-no-roots", "webpki-roots"]
+http-no-roots = ["reqwest"]
+webpki-roots = ["reqwest/rustls-tls-webpki-roots"]
+native-roots = ["reqwest/rustls-tls-native-roots"]
 grpc = ["tonic"]
 
 [dependencies]
@@ -25,7 +33,7 @@ prost = "0.13"
 fnv = "1"
 rand = "0.8"
 regex = "1"
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], optional = true, default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls-manual-roots-no-provider"], optional = true, default-features = false }
 notify = "7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
