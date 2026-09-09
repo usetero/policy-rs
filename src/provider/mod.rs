@@ -27,6 +27,10 @@ pub type PolicyCallback = Arc<dyn Fn(Vec<Policy>) + Send + Sync>;
 /// Returns a list of policy IDs with their stats snapshots.
 pub type StatsCollector = Arc<dyn Fn() -> Vec<(String, PolicyStatsSnapshot)> + Send + Sync>;
 
+/// Result of a provider sync: the response hash and its policies, or a sync error.
+#[cfg(any(feature = "reqwest", feature = "grpc"))]
+pub type SyncResult = Result<(Option<String>, Vec<Policy>), PolicyError>;
+
 /// Trait for policy providers.
 ///
 /// Providers notify subscribers when policies change. For one-shot loading,

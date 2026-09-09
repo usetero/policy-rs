@@ -352,9 +352,39 @@ engine.evaluate(&registry.snapshot(), &record)?;            // counts the record
 ```
 
 The HTTP and gRPC providers report volume in their sync requests automatically,
-resetting the counters as they are read into a request — a failed sync drops its
-interval rather than replaying it, so reported volume is a lower bound. To read
-it directly, use `registry.volume().collect()`.
+resetting the counters as they are read into a request. A failed or cancelled
+sync puts its delta back, so the next sync carries it. If the server processed a
+request but its response was lost, a retry can count that volume again. Pending
+volume is held in memory and is lost on process termination. Policy match and
+transform statistics still reset on read and are not restored after failure.
+To drain the counters directly, use `registry.volume().collect()`.
+
+### On-Demand Sync
+
+The poll loop is a timer. A process that loses its CPU between invocations, such
+as an AWS Lambda extension, cannot rely on it. Call `flush()` at a point where
+the process is sure to run, and keep the provider alive to reach it:
+
+```rust
+let provider = Arc::new(HttpProvider::new_with_initial_fetch(config).await?);
+registry.subscribe(provider.as_ref())?;
+
+// At the end of each invocation:
+provider.flush().await?; // sends policy statuses and volume, then returns
+
+// On shutdown, cancel background polling before the final flush:
+provider.stop();
+provider.flush().await?;
+```
+
+`flush()` is an incremental sync. Policy changes in its response reach the
+registry through the same callback the poll loop uses. Concurrent syncs wait for
+the current request to finish. `stop()` cancels background polling, including
+its in-flight request, while leaving `flush()` available.
+
+The client that `HttpProvider::new` builds uses a 30 second request timeout. Use
+`HttpProvider::with_client(config, client)` to supply your own client, then
+`fetch_initial()` before `subscribe()`.
 
 ### Multiple Providers
 

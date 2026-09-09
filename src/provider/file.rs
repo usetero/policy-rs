@@ -2742,7 +2742,7 @@ mod tests {
         assert_eq!(log.lock().unwrap().len(), 1); // still just the initial callback
 
         // Write valid content again — watcher should recover and call back.
-        std::fs::write(file.path(), &one_policy_json("recovered")).unwrap();
+        std::fs::write(file.path(), one_policy_json("recovered")).unwrap();
         wait_for_callbacks(&log, 2).await;
 
         let entries = log.lock().unwrap();

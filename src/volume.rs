@@ -18,7 +18,8 @@ use crate::proto::tero::policy::v1::VolumeStats;
 /// Counts telemetry entering policy evaluation, regardless of policy match.
 ///
 /// Reachable from a registry via [`PolicyRegistry::volume()`], which is also how
-/// the HTTP and gRPC providers report it: each sync request drains the counters.
+/// the HTTP and gRPC providers report it: each sync request drains the counters,
+/// and a failed sync puts its delta back.
 ///
 /// Counting happens before the keep and transform stages, so dropped,
 /// sampled-out, and redacted records are all included at their pre-policy size.
@@ -91,10 +92,9 @@ impl VolumeTracker {
     /// last call.
     ///
     /// Returns `None` when nothing has been observed — the spec says to omit
-    /// `volume` rather than send a zero-valued message. Counters reset on read
-    /// whether or not the sync carrying them succeeds: a failed sync drops its
-    /// interval rather than replaying it, since the server cannot tell a replay
-    /// from new telemetry. Reported volume is a lower bound, not an exact total.
+    /// `volume` rather than send a zero-valued message. This method resets the
+    /// counters on read. Providers restore the delta if their request fails or
+    /// is cancelled. A lost response can cause a retry to report volume twice.
     pub fn collect(&self) -> Option<VolumeStats> {
         let stats = VolumeStats {
             log_records: self.log_records.swap(0, Ordering::Relaxed),
@@ -106,6 +106,25 @@ impl VolumeTracker {
         };
 
         (stats != VolumeStats::default()).then_some(stats)
+    }
+
+    /// Add a drained delta back, after the sync carrying it failed.
+    ///
+    /// Counting continues during a sync, so this adds rather than assigns. The
+    /// next sync reports the restored delta together with whatever arrived in
+    /// the meantime.
+    #[cfg(any(feature = "reqwest", feature = "grpc", test))]
+    pub(crate) fn restore(&self, stats: &VolumeStats) {
+        self.log_records
+            .fetch_add(stats.log_records, Ordering::Relaxed);
+        self.log_bytes.fetch_add(stats.log_bytes, Ordering::Relaxed);
+        self.metric_data_points
+            .fetch_add(stats.metric_data_points, Ordering::Relaxed);
+        self.metric_bytes
+            .fetch_add(stats.metric_bytes, Ordering::Relaxed);
+        self.spans.fetch_add(stats.spans, Ordering::Relaxed);
+        self.span_bytes
+            .fetch_add(stats.span_bytes, Ordering::Relaxed);
     }
 }
 
@@ -155,6 +174,38 @@ mod tests {
 
         assert_eq!(t.collect().unwrap().log_records, 1);
         assert!(t.collect().is_none());
+    }
+
+    #[test]
+    fn restore_returns_a_failed_delta() {
+        let t = VolumeTracker::new();
+        t.record_log();
+        t.add_log_bytes(400);
+        t.record_metric();
+        t.add_metric_bytes(200);
+        t.record_span();
+        t.add_span_bytes(100);
+
+        let drained = t.collect().unwrap();
+        assert!(t.collect().is_none());
+
+        // Counting continues while the failed sync is in flight.
+        t.record_log();
+        t.record_metric();
+        t.record_span();
+        t.restore(&drained);
+
+        assert_eq!(
+            t.collect().unwrap(),
+            VolumeStats {
+                log_records: 2,
+                log_bytes: 400,
+                metric_data_points: 2,
+                metric_bytes: 200,
+                spans: 2,
+                span_bytes: 100,
+            }
+        );
     }
 
     /// Overlapping syncs each drain a disjoint delta, so the total reported

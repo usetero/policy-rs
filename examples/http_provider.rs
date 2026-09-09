@@ -33,6 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     fn kv(key: &str, value: &str) -> KeyValue {
         KeyValue {
             key: key.to_string(),
+            key_strindex: 0,
             value: Some(AnyValue {
                 value: Some(any_value::Value::StringValue(value.to_string())),
             }),
@@ -59,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .client_metadata(client_metadata);
 
     // Create the provider with async initialization
-    let provider = Arc::new(HttpProvider::new_with_initial_fetch(config)?);
+    let provider = Arc::new(HttpProvider::new_with_initial_fetch(config).await?);
 
     // Create a registry and subscribe to the provider
     let registry = Arc::new(PolicyRegistry::new());
