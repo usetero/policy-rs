@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.2](https://github.com/usetero/policy-rs/compare/v1.8.1...v1.8.2) (2026-09-09)
+
+
+### Bug Fixes
+
+* preserve volume across failed and cancelled syncs ([#107](https://github.com/usetero/policy-rs/issues/107)) ([c40e137](https://github.com/usetero/policy-rs/commit/c40e13794518085395d96bf108d5fb4aef7b36ef))
+
 ## [1.8.1](https://github.com/usetero/policy-rs/compare/v1.8.0...v1.8.1) (2026-08-19)
 
 
