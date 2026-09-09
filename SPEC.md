@@ -121,14 +121,20 @@ zero", consumers must not read `0` as an observation.
 
 `volume().collect()` drains the counters and returns the delta since the last
 call, or `None` when nothing was observed — providers omit `volume` from the sync
-request rather than sending zeroes. Overlapping syncs each drain a disjoint
-delta, so no volume is reported twice.
+request rather than sending zeroes. Each drain takes a disjoint delta.
 
-Counters reset **on read**, whether or not the sync carrying them succeeds, which
-is the rule `match_hits`/`match_misses` already follow. A failed sync drops its
-interval from numerator and denominator alike rather than replaying it — the
-server cannot tell a replay from new telemetry. Reported volume is therefore a
-lower bound, not an exact total.
+Counters reset **on read**. HTTP and gRPC providers restore a delta if its sync
+fails or is cancelled, adding it to any volume observed during the request.
+Successful syncs consume their delta. Requests from the same provider are
+serialized so polling and on-demand flushes share consistent hash and timestamp
+state.
+
+Delivery is best effort: if the server processes a request but the response is
+lost, retrying can count the volume twice. Pending volume exists only in memory
+and is lost when the process terminates. Policy statuses (`match_hits`,
+`match_misses`, and transform statistics) still reset on read and are not
+restored after failure. Neither exact totals nor a lower bound are guaranteed
+for reported volume.
 
 ---
 
