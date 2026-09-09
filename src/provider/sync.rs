@@ -1,12 +1,44 @@
 //! Shared sync utilities for HTTP and gRPC providers.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use crate::policy::Policy;
 use crate::proto::tero::policy::v1::{PolicySyncStatus, TransformStageStatus, VolumeStats};
 use crate::registry::PolicyStatsSnapshot;
 use crate::volume::VolumeTracker;
 
-use super::StatsCollector;
+use super::{PolicyCallback, StatsCollector};
+
+/// Serializes initial delivery and later updates, retaining the latest update
+/// until the subscriber is ready. The mutex covers callback execution so an
+/// update cannot overtake the initial callback.
+#[derive(Default)]
+pub(super) struct PolicySubscription {
+    state: Mutex<SubscriptionState>,
+}
+
+#[derive(Default)]
+struct SubscriptionState {
+    pending: Option<Vec<Policy>>,
+    callback: Option<PolicyCallback>,
+}
+
+impl PolicySubscription {
+    pub(super) fn subscribe(&self, initial: Vec<Policy>, callback: PolicyCallback) {
+        let mut state = self.state.lock().unwrap();
+        callback(state.pending.take().unwrap_or(initial));
+        state.callback = Some(callback);
+    }
+
+    pub(super) fn update(&self, policies: Vec<Policy>) {
+        let mut state = self.state.lock().unwrap();
+        if let Some(callback) = &state.callback {
+            callback(policies);
+        } else {
+            state.pending = Some(policies);
+        }
+    }
+}
 
 /// Convert a PolicyStatsSnapshot to a PolicySyncStatus for reporting.
 pub fn stats_to_sync_status(id: String, stats: PolicyStatsSnapshot) -> PolicySyncStatus {

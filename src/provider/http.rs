@@ -15,7 +15,7 @@ use crate::error::PolicyError;
 use crate::policy::Policy;
 use crate::proto::tero::policy::v1::{ClientMetadata, SyncRequest, SyncResponse};
 
-use super::sync::{PendingVolume, collect_policy_statuses};
+use super::sync::{PendingVolume, PolicySubscription, collect_policy_statuses};
 use super::{PolicyCallback, PolicyProvider, StatsCollector, SyncResult};
 use crate::volume::VolumeTracker;
 
@@ -125,8 +125,8 @@ struct Inner {
     stats_collector: RwLock<Option<StatsCollector>>,
     /// Tracker for reporting total observed telemetry volume.
     volume_tracker: RwLock<Option<Arc<VolumeTracker>>>,
-    /// Subscriber callback, invoked when a sync returns a new hash.
-    callback: RwLock<Option<PolicyCallback>>,
+    /// Orders initial delivery and subsequent policy updates.
+    subscription: PolicySubscription,
 }
 
 /// Request timeout of the client that [`HttpProvider::new`] builds.
@@ -259,11 +259,7 @@ impl Inner {
         let policies: Vec<Policy> = response.policies.into_iter().map(Policy::new).collect();
 
         if changed {
-            // Clone the callback out first: it must not run under the lock.
-            let callback = self.callback.read().unwrap().clone();
-            if let Some(callback) = callback {
-                callback(policies.clone());
-            }
+            self.subscription.update(policies.clone());
         }
 
         (new_hash, policies)
@@ -310,7 +306,7 @@ impl HttpProvider {
                 sync_lock: tokio::sync::Mutex::new(()),
                 stats_collector: RwLock::new(None),
                 volume_tracker: RwLock::new(None),
-                callback: RwLock::new(None),
+                subscription: PolicySubscription::default(),
             }),
             polling_task: Mutex::new(None),
             initial_policies: RwLock::new(None),
@@ -432,8 +428,7 @@ impl PolicyProvider for HttpProvider {
         let policies = self.initial_policies.write().unwrap().take().expect(
             "HttpProvider::subscribe() requires fetch_initial() or new_with_initial_fetch()",
         );
-        callback(policies);
-        *self.inner.callback.write().unwrap() = Some(callback);
+        self.inner.subscription.subscribe(policies, callback);
 
         // Start polling in background. Every sync applies the callback itself,
         // so this only drains the channel and reports errors.
@@ -910,5 +905,95 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn subscribe_delivers_updates_received_after_initial_fetch() {
+        for policy_count in [0, 2] {
+            let (provider, _) = unreachable_provider();
+            *provider.initial_policies.write().unwrap() =
+                Some(vec![Policy::new(Default::default())]);
+            // A flush/load changes the hash before a subscriber is registered.
+            provider.inner.apply(SyncResponse {
+                hash: "updated".into(),
+                policies: vec![Default::default(); policy_count],
+                ..Default::default()
+            });
+            let (updates, mut callbacks) = mpsc::unbounded_channel();
+            provider
+                .subscribe(Arc::new(move |policies| {
+                    updates.send(policies.len()).unwrap();
+                }))
+                .unwrap();
+            provider.stop();
+            assert_eq!(callbacks.try_recv().unwrap(), policy_count);
+            // The next response with the same hash cannot repair a missed update.
+            provider.inner.apply(SyncResponse {
+                hash: "updated".into(),
+                ..Default::default()
+            });
+            assert!(callbacks.try_recv().is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn subscribe_orders_initial_delivery_before_concurrent_update() {
+        let (provider, _) = unreachable_provider();
+        let provider = Arc::new(provider);
+        *provider.initial_policies.write().unwrap() = Some(vec![Policy::new(Default::default())]);
+        let (updates, mut callbacks) = mpsc::unbounded_channel();
+        let (release, wait_for_release) = std::sync::mpsc::channel();
+        let wait_for_release = Mutex::new(wait_for_release);
+        let subscribing = {
+            let provider = provider.clone();
+            tokio::task::spawn_blocking(move || {
+                provider
+                    .subscribe(Arc::new(move |policies| {
+                        let count = policies.len();
+                        updates.send(count).unwrap();
+                        if count == 1 {
+                            wait_for_release.lock().unwrap().recv().unwrap();
+                        }
+                    }))
+                    .unwrap();
+                provider.stop();
+            })
+        };
+        assert_eq!(
+            timeout(Duration::from_secs(5), callbacks.recv())
+                .await
+                .unwrap(),
+            Some(1)
+        );
+        let (started, applying) = oneshot::channel();
+        let mut update = {
+            let provider = provider.clone();
+            tokio::task::spawn_blocking(move || {
+                started.send(()).unwrap();
+                provider.inner.apply(SyncResponse {
+                    hash: "updated".into(),
+                    policies: vec![Default::default(); 2],
+                    ..Default::default()
+                })
+            })
+        };
+        applying.await.unwrap();
+        assert!(
+            timeout(Duration::from_millis(50), &mut update)
+                .await
+                .is_err(),
+            "an update must wait for initial delivery and callback registration"
+        );
+        release.send(()).unwrap();
+        timeout(Duration::from_secs(5), subscribing)
+            .await
+            .unwrap()
+            .unwrap();
+        timeout(Duration::from_secs(5), update)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(callbacks.try_recv().unwrap(), 2);
+        assert!(callbacks.try_recv().is_err());
     }
 }
